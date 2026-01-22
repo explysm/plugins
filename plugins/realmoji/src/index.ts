@@ -63,6 +63,6 @@ patches.push(after("generate", RowManager.prototype, ([data], row) => {
       jumboable: jumbo ? true : undefined,
     };
   }
-});
+}));
 
 export const onUnload = () => patches.forEach((unpatch) => unpatch());
