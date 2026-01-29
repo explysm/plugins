@@ -1,6 +1,5 @@
-import { React } from "@vendetta/metro/common";
+import { React, ReactNative as RN } from "@vendetta/metro/common";
 import { Forms } from "@vendetta/ui/components";
-import { ScrollView, Text } from "react-native";
 import { useEffect } from "react";
 import {
     useDebugInfo,
@@ -8,6 +7,7 @@ import {
     logComponentError,
 } from "../../utils/debug";
 
+const { ScrollView, Text } = RN;
 const { FormText } = Forms;
 
 export default React.memo(function Debug() {

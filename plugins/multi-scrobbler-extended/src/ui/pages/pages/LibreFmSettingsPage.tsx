@@ -1,6 +1,5 @@
-import { React } from "@vendetta/metro/common";
+import { React, ReactNative as RN } from "@vendetta/metro/common";
 import { useProxy } from "@vendetta/storage";
-import { Linking } from "react-native";
 import { showToast } from "@vendetta/ui/toasts";
 import { getAssetIDByName } from "@vendetta/ui/assets";
 import {
@@ -12,6 +11,8 @@ import {
 } from "./components/TableComponents";
 import { plugin } from "@vendetta";
 import { serviceFactory, getStorage, setStorage } from "../Settings";
+
+const { Linking } = RN;
 
 export default function LibreFmSettingsPage() {
   useProxy(plugin.storage);
