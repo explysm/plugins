@@ -9,4 +9,3 @@ https://`explysm`.github.io/`fire-plugins`/`PLUGIN_NAME`
 # Plugins
 
 ## https://explysm.github.io/fire-plugins/realmojiextended
-## https://explysm.github.io/fire-plugins/multi-scrobbler-extended
