@@ -50,15 +50,16 @@ patches.push(after("generate", RowManager.prototype, ([data], row) => {
     if (!match) continue;
     const id = match[1];
     const emoji = getCustomEmojiById(id);
-    const animated = emoji?.animated ?? match[0].includes(".gif");
-    const url = `https://cdn.discordapp.com/emojis/${id}.${animated ? "gif" : "webp"}?size=128`;
+    const animated = emoji?.animated ?? match[0].includes(".gif") || match[0].includes(".webm");
+    const fileExtension = animated ? (match[0].includes(".webm") ? "webm" : "gif") : "webp";
+    const url = `https://cdn.discordapp.com/emojis/${id}.${fileExtension}?size=128`;
 
     content[i] = {
       type: "customEmoji",
       id,
       alt: emoji?.name ?? "<realmoji>",
       src: url,
-      frozenSrc: url.replace("gif", "webp"),
+      frozenSrc: url.replace(fileExtension, "webp"),
       animated,
       jumboable: jumbo ? true : undefined,
     };
