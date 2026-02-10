@@ -16,4 +16,3 @@ https://`explysm`.github.io/`fire-plugins`/`PLUGIN_NAME`
 # Plugins
 
 ## https://explysm.github.io/plugins/realmojiextended
-https://explysm.github.io/plugins/dislateextended
