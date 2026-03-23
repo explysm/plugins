@@ -1,1 +1,0 @@
-{"name":"NoSelfReacts","description":"Automatically removes any reactions you add to your own messages","authors":[{"name":"You","id":"YOUR_USER_ID"}],"main":"index.js","vendetta":{"icon":"ic_emoji","original":true},"hash":"72fe682e7016ef33a52e45c54b4d7e51549fdda6e4c8aafc792e9568fe646d6c"}
