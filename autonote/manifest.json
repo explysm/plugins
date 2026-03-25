@@ -1,0 +1,1 @@
+{"name":"AutoNote","description":"Plugin that adds a footer to @silent messages explaining that it was sent as a @silent message to avoid annoyance.","authors":[{"name":"explysm","id":"752899252866515025"}],"main":"index.js","vendetta":{"icon":"ic_emoji_24px"},"hash":"34cf1a4e82f15f51d429bbc3e4837e12546665dd16ef919b2b8b5c1b17b52cf3"}
