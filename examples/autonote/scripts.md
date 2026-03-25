@@ -11,6 +11,7 @@ AutoNote allows running arbitrary JavaScript to manipulate message content and p
   - `delete(messageId)`: Deletes a message in the current channel.
   - `edit(messageId, text)`: Edits a message in the current channel.
   - `copy(text)`: Copies text to the system clipboard.
+  - `fetch(url, options)`: Standard `fetch` API for network requests. Returns a Promise.
   - `runAfter(callback)`: Registers a function to run **after** the message is sent. Receives the `messageId`.
 
 ---
@@ -67,4 +68,14 @@ if (content.length > 2000) {
     return content.slice(0, 2000);
 }
 return content;
+```
+
+### 6. Fetch Random Quote from API
+Uses `utils.fetch` to retrieve data from an external API and append it to your message.
+**Script:**
+```javascript
+const quote = await utils.fetch("https://api.quotable.io/random")
+    .then(r => r.json());
+
+return content + `\n\n> ${quote.content} — ${quote.author}`;
 ```

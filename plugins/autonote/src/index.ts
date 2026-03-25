@@ -29,7 +29,35 @@ interface AutoNote {
   position: NotePosition;
   script?: string;
   data?: Record<string, any>;
+  isRegex?: boolean;
+  icon?: string;
+  whitelist?: string; // Comma-separated IDs
+  blacklist?: string; // Comma-separated IDs
 }
+
+const TEMPLATES: Record<string, string> = {
+  "Auto-Splitter": `// Splits long messages into multiple parts
+const MAX_LENGTH = 2000;
+if (content.length <= MAX_LENGTH) return content;
+const parts = [];
+let remaining = content;
+while (remaining.length > 0) {
+    parts.push(remaining.slice(0, MAX_LENGTH));
+    remaining = remaining.slice(MAX_LENGTH);
+}
+parts.forEach(p => utils.send(p));
+return null; // Cancel original`,
+  "Ninja Mode": `// Deletes message after 5 seconds
+utils.runAfter(id => {
+    setTimeout(() => utils.delete(id), 5000);
+});
+return content;`,
+  "Chaos Mode": `// Randomly swaps letters
+return content.split("").map(c => Math.random() > 0.8 ? c.toUpperCase() : c.toLowerCase()).join("");`,
+  "API Example": `// Fetch data from an API
+const data = await utils.fetch("https://api.quotable.io/random").then(r => r.json());
+return content + "\\n\\n> " + data.content + " — " + data.author;`
+};
 
 const styles = StyleSheet.create({
   card: {
@@ -58,6 +86,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 20,
   },
+  secondaryButton: {
+    backgroundColor: "rgba(255, 255, 255, 0.1)",
+    padding: 8,
+    borderRadius: 4,
+    alignItems: "center",
+    marginTop: 8,
+  },
   buttonText: {
     color: "white",
     fontWeight: "bold",
@@ -69,6 +104,17 @@ const styles = StyleSheet.create({
      borderRadius: 4,
      padding: 8,
      color: "#ccc",
+  },
+  modalContent: {
+    flex: 1,
+    backgroundColor: "#2c2f33",
+    padding: 20,
+  },
+  modalHeader: {
+    fontSize: 20,
+    fontWeight: "bold",
+    color: "white",
+    marginBottom: 10,
   }
 });
 
@@ -81,24 +127,63 @@ function applyStyle(text: string, style: NoteStyle): string {
   }
 }
 
-function processPlaceholders(text: string, triggerMatch: string): string {
+async function processPlaceholders(text: string, triggerMatch: string, content: string): Promise<string> {
   const now = new Date();
-  return text
+  let result = text
     .replace(/{trigger}/g, triggerMatch)
     .replace(/{time}/g, now.toLocaleTimeString())
-    .replace(/{date}/g, now.toLocaleDateString());
+    .replace(/{date}/g, now.toLocaleDateString())
+    .replace(/{wordCount}/g, content.split(/\s+/).filter(Boolean).length.toString());
+
+  // Handle {random:A,B,C}
+  result = result.replace(/{random:([^}]+)}/g, (_, options) => {
+    const choices = options.split(",").map((s: string) => s.trim());
+    return choices[Math.floor(Math.random() * choices.length)];
+  });
+
+  // Handle {clipboard}
+  if (result.includes("{clipboard}")) {
+      const clip = await Clipboard?.getString?.() || "";
+      result = result.replace(/{clipboard}/g, clip);
+  }
+
+  // Handle {api:url}
+  const apiMatches = result.match(/{api:([^}]+)}/g);
+  if (apiMatches) {
+      for (const match of apiMatches) {
+          try {
+              const url = match.slice(5, -1);
+              const res = await fetch(url).then(r => r.text());
+              result = result.replace(match, res.slice(0, 500)); // Limit response length
+          } catch(e) { console.error("[AutoNote] API fetch failed:", e); }
+      }
+  }
+
+  return result;
 }
 
-function addAutoNote(content: string, notes: AutoNote[], utils: any): string | null {
+function isScoped(note: AutoNote, channelId: string): boolean {
+    if (note.whitelist) {
+        const ids = note.whitelist.split(",").map(s => s.trim());
+        if (ids.length > 0 && !ids.includes(channelId)) return false;
+    }
+    if (note.blacklist) {
+        const ids = note.blacklist.split(",").map(s => s.trim());
+        if (ids.length > 0 && ids.includes(channelId)) return false;
+    }
+    return true;
+}
+
+async function addAutoNote(content: string, notes: AutoNote[], utils: any, channelId: string): Promise<string | null> {
   let newContent = content;
   let matchedSpecific = false;
 
-  const runScript = (note: AutoNote, currentContent: string) => {
+  const runScript = async (note: AutoNote, currentContent: string) => {
     if (!note.script) return currentContent;
     try {
       note.data ??= {};
-      const scriptFn = new Function("content", "note", "utils", "storage", note.script);
-      const result = scriptFn(currentContent, note, utils, note.data);
+      const scriptFn = new Function("content", "note", "utils", "storage", `return (async () => { ${note.script} })();`);
+      const result = await scriptFn(currentContent, note, utils, note.data);
       if (result === null) return null;
       return typeof result === "string" ? result : currentContent;
     } catch (e) {
@@ -110,10 +195,22 @@ function addAutoNote(content: string, notes: AutoNote[], utils: any): string | n
   const safeNotes = Array.isArray(notes) ? notes : [];
 
   for (const note of safeNotes) {
-    if (!note.enabled || !note.trigger) continue;
-    const escapedTrigger = note.trigger.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const triggerRegex = new RegExp("^" + escapedTrigger + "\\b", "i");
-    const match = newContent.match(triggerRegex);
+    if (!note.enabled || !note.trigger || !isScoped(note, channelId)) continue;
+    
+    let match: RegExpMatchArray | null = null;
+    let triggerRegex: RegExp;
+
+    if (note.isRegex) {
+        try {
+            triggerRegex = new RegExp(note.trigger, "i");
+            match = newContent.match(triggerRegex);
+        } catch(e) { console.error("[AutoNote] Invalid regex:", e); continue; }
+    } else {
+        const escapedTrigger = note.trigger.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        triggerRegex = new RegExp("^" + escapedTrigger + "\\b", "i");
+        match = newContent.match(triggerRegex);
+    }
+
     if (!match) continue;
 
     matchedSpecific = true;
@@ -122,11 +219,11 @@ function addAutoNote(content: string, notes: AutoNote[], utils: any): string | n
       newContent = newContent.replace(triggerRegex, "").trim();
     }
 
-    const scriptResult = runScript(note, newContent);
+    const scriptResult = await runScript(note, newContent);
     if (scriptResult === null) return null;
     newContent = scriptResult;
 
-    let addedText = processPlaceholders(note.footer || "", matchedText);
+    let addedText = await processPlaceholders(note.footer || "", matchedText, newContent);
     addedText = applyStyle(addedText, note.style || "none");
     const position = note.position || "bottom";
     newContent = position === "top" ? addedText + "\n" + newContent : newContent + "\n" + addedText;
@@ -134,12 +231,12 @@ function addAutoNote(content: string, notes: AutoNote[], utils: any): string | n
 
   if (!matchedSpecific) {
     for (const note of safeNotes) {
-      if (!note.enabled || note.trigger) continue;
-      const scriptResult = runScript(note, newContent);
+      if (!note.enabled || note.trigger || !isScoped(note, channelId)) continue;
+      const scriptResult = await runScript(note, newContent);
       if (scriptResult === null) return null;
       newContent = scriptResult;
 
-      let addedText = processPlaceholders(note.footer || "", "");
+      let addedText = await processPlaceholders(note.footer || "", "", newContent);
       addedText = applyStyle(addedText, note.style || "none");
       const position = note.position || "bottom";
       newContent = position === "top" ? addedText + "\n" + newContent : newContent + "\n" + addedText;
@@ -159,14 +256,15 @@ storage.notes ??= [
     removeTrigger: false,
     style: "subtext",
     position: "bottom",
-    data: {}
+    data: {},
+    icon: "🥷"
   },
 ];
 
 const patches = [];
 
 // Use INSTEAD to allow true cancellation
-patches.push(instead("sendMessage", MessageActions, (args, orig) => {
+patches.push(instead("sendMessage", MessageActions, async (args, orig) => {
     const channelId = args[0];
     const message = args[1];
     
@@ -180,10 +278,11 @@ patches.push(instead("sendMessage", MessageActions, (args, orig) => {
         delete: (messageId: string) => MessageActions.deleteMessage?.(channelId, messageId),
         edit: (messageId: string, msg: string) => MessageActions.editMessage?.(channelId, messageId, { content: msg }),
         copy: (text: string) => Clipboard?.setString?.(text),
+        fetch: (url: string, opts?: any) => fetch(url, opts),
         runAfter: (cb: (id: string) => void) => afterCallbacks.push(cb)
     };
 
-    const result = addAutoNote(message.content, storage.notes, utils);
+    const result = await addAutoNote(message.content, storage.notes, utils, channelId);
     
     if (result === null) {
         return Promise.resolve({
@@ -235,21 +334,38 @@ export const settings = () => {
       return initial;
   });
   const [selectingStyle, setSelectingStyle] = React.useState<string | null>(null);
+  const [modalScript, setModalScript] = React.useState<{id: string, code: string} | null>(null);
 
   const toggleCollapsed = (id: string) => setCollapsed(prev => ({ ...prev, [id]: !prev[id] }));
   const toggleSelectingStyle = (id: string) => setSelectingStyle(prev => (prev === id ? null : id));
   const updateNotes = (newNotes: AutoNote[]) => { storage.notes = newNotes; setNotes([...newNotes]); };
 
-  const addNote = () => {
+  const addNote = (profile?: Partial<AutoNote>) => {
     const newNote: AutoNote = {
       id: Math.random().toString(36).slice(2),
-      enabled: true, trigger: "", footer: "", removeTrigger: false, style: "none", position: "bottom", data: {}
+      enabled: true, trigger: "", footer: "", removeTrigger: false, style: "none", position: "bottom", data: {}, icon: "📝",
+      ...profile
     };
     updateNotes([...notes, newNote]);
   };
 
   const deleteNote = (id: string) => updateNotes(notes.filter((n) => n.id !== id));
   const updateNote = (id: string, partial: Partial<AutoNote>) => updateNotes(notes.map((n) => (n.id === id ? { ...n, ...partial } : n)));
+
+  const exportProfile = (note: AutoNote) => {
+      const data = btoa(JSON.stringify(note));
+      Clipboard?.setString?.(data);
+  };
+
+  const importProfile = async () => {
+      try {
+          const data = await Clipboard?.getString?.();
+          if (!data) return;
+          const profile = JSON.parse(atob(data));
+          delete profile.id; // Generate new ID
+          addNote(profile);
+      } catch(e) { console.error("[AutoNote] Import failed:", e); }
+  };
 
   if (!TableRowGroup || !TableSwitchRow || !TableRow || !Stack || !TextInput) {
     return React.createElement(ScrollView, { style: { flex: 1, padding: 12 } },
@@ -263,7 +379,7 @@ export const settings = () => {
         React.createElement(View, { key: note.id, style: styles.card },
           React.createElement(TouchableOpacity, { onPress: () => toggleCollapsed(note.id), style: styles.headerRow },
             React.createElement(Text, { style: { color: "white", fontWeight: "bold", fontSize: 16 } }, 
-              `${collapsed[note.id] ? "▶" : "▼"} ${note.trigger ? "Trigger: " + note.trigger : "Global Default (Fallback)"}`
+              `${collapsed[note.id] ? "▶" : "▼"} ${note.icon || "📝"} ${note.trigger ? (note.isRegex ? "/" + note.trigger + "/" : "Trigger: " + note.trigger) : "Global Fallback"}`
             ),
             React.createElement(Text, { style: { color: note.enabled ? "#43b581" : "#f04747", fontSize: 12 } }, 
                 note.enabled ? "ACTIVE" : "DISABLED"
@@ -273,7 +389,11 @@ export const settings = () => {
           !collapsed[note.id] && React.createElement(View, { style: { marginTop: 10 } },
             React.createElement(TableRowGroup, null,
               React.createElement(TableSwitchRow, { label: "Enabled", value: note.enabled, onValueChange: (v: boolean) => updateNote(note.id, { enabled: v }) }),
+              React.createElement(TextInput, { label: "Icon Emoji", value: note.icon || "📝", onChange: (v: string) => updateNote(note.id, { icon: v }) }),
               React.createElement(TextInput, { label: "Trigger Keyword", placeholder: "Leave empty for every message...", value: note.trigger, onChange: (v: string) => updateNote(note.id, { trigger: v }) }),
+              React.createElement(TableSwitchRow, { label: "Use Regular Expression", value: note.isRegex || false, onValueChange: (v: boolean) => updateNote(note.id, { isRegex: v }) }),
+              React.createElement(TextInput, { label: "Whitelist IDs", placeholder: "Comma-separated channel IDs...", value: note.whitelist || "", onChange: (v: string) => updateNote(note.id, { whitelist: v }) }),
+              React.createElement(TextInput, { label: "Blacklist IDs", placeholder: "Comma-separated channel IDs...", value: note.blacklist || "", onChange: (v: string) => updateNote(note.id, { blacklist: v }) }),
               React.createElement(TextInput, { label: "Note Text", placeholder: "Enter text...", value: note.footer, onChange: (v: string) => updateNote(note.id, { footer: v }), multiline: true }),
               React.createElement(TableSwitchRow, { label: "Remove trigger from message", value: note.removeTrigger, onValueChange: (v: boolean) => updateNote(note.id, { removeTrigger: v }) }),
               React.createElement(TableRow, { label: "Position", subLabel: `Currently at: ${(note.position || "bottom").toUpperCase()}`, onPress: () => updateNote(note.id, { position: (note.position || "bottom") === "top" ? "bottom" : "top" }) }),
@@ -291,7 +411,26 @@ export const settings = () => {
                   React.createElement(TextInput, {
                     placeholder: "utils.runAfter(id => utils.delete(id));",
                     multiline: true, value: note.script || "", onChange: (v: string) => updateNote(note.id, { script: v }), style: styles.scriptInput
-                  })
+                  }),
+                  React.createElement(View, { style: { flexDirection: "row", gap: 8 } },
+                      React.createElement(TouchableOpacity, { style: [styles.secondaryButton, { flex: 1 }], onPress: () => setModalScript({ id: note.id, code: note.script || "" }) },
+                          React.createElement(Text, { style: styles.buttonText }, "🖥️ Big Editor")
+                      ),
+                      React.createElement(TouchableOpacity, { 
+                          style: [styles.secondaryButton, { flex: 1 }], 
+                          onPress: () => {
+                              const currentKeys = Object.keys(TEMPLATES);
+                              const idx = Math.floor(Math.random() * currentKeys.length);
+                              const name = currentKeys[idx];
+                              updateNote(note.id, { script: TEMPLATES[name] });
+                          } 
+                      },
+                          React.createElement(Text, { style: styles.buttonText }, "📚 Templates")
+                      )
+                  ),
+                  React.createElement(TouchableOpacity, { style: styles.secondaryButton, onPress: () => exportProfile(note) },
+                      React.createElement(Text, { style: styles.buttonText }, "📤 Export Profile (Copy String)")
+                  )
               )
             ),
             React.createElement(TouchableOpacity, { style: styles.deleteButton, onPress: () => deleteNote(note.id) },
@@ -300,17 +439,41 @@ export const settings = () => {
           )
         )
       ),
-      React.createElement(TouchableOpacity, { style: styles.addButton, onPress: addNote },
+      React.createElement(TouchableOpacity, { style: styles.addButton, onPress: () => addNote() },
         React.createElement(Text, { style: styles.buttonText }, "+ Add New Profile")
       ),
+      React.createElement(TouchableOpacity, { style: [styles.addButton, { backgroundColor: "#4e5058" }], onPress: importProfile },
+        React.createElement(Text, { style: styles.buttonText }, "📥 Import Profile from Clipboard")
+      ),
       React.createElement(TableRowGroup, { title: "Info" },
-        React.createElement(TableRow, { label: "Placeholders", subLabel: "{trigger}, {time}, {date}", disabled: true }),
+        React.createElement(TableRow, { label: "Placeholders", subLabel: "{trigger}, {time}, {date}, {wordCount}, {clipboard}, {random:A,B}, {api:url}", disabled: true }),
         React.createElement(TableRow, {
             label: "Script Context",
-            subLabel: "content, note, storage, utils (send, delete, edit, copy, runAfter). Return null to cancel.",
+            subLabel: "content, note, storage, utils (send, delete, edit, copy, runAfter, fetch). Return null to cancel.",
             disabled: true,
         })
       )
+    ),
+
+    modalScript && React.createElement(ReactNative.Modal, { visible: true, animationType: "slide" },
+        React.createElement(View, { style: styles.modalContent },
+            React.createElement(Text, { style: styles.modalHeader }, "Big Script Editor"),
+            React.createElement(TextInput, {
+                style: [styles.scriptInput, { flex: 1, textAlignVertical: "top" }],
+                multiline: true,
+                value: modalScript.code,
+                onChange: (v: string) => setModalScript({ ...modalScript, code: v })
+            }),
+            React.createElement(TouchableOpacity, { 
+                style: [styles.addButton, { marginTop: 16 }], 
+                onPress: () => {
+                    updateNote(modalScript.id, { script: modalScript.code });
+                    setModalScript(null);
+                } 
+            },
+                React.createElement(Text, { style: styles.buttonText }, "SAVE & CLOSE")
+            )
+        )
     )
   );
 };
