@@ -97,10 +97,8 @@ function addAutoNote(content: string, notes: AutoNote[], utils: any): string | n
     if (!note.script) return currentContent;
     try {
       note.data ??= {};
-      // Pass content, note, utils, and a dedicated storage object for the script
       const scriptFn = new Function("content", "note", "utils", "storage", note.script);
       const result = scriptFn(currentContent, note, utils, note.data);
-      
       if (result === null) return null;
       return typeof result === "string" ? result : currentContent;
     } catch (e) {
@@ -172,7 +170,6 @@ patches.push(instead("sendMessage", MessageActions, (args, orig) => {
     const channelId = args[0];
     const message = args[1];
     
-    // Safety check: ensure content is a string
     if (typeof message?.content !== "string" || message?.__autoNoteProcessed) {
         return orig(...args);
     }
@@ -182,13 +179,6 @@ patches.push(instead("sendMessage", MessageActions, (args, orig) => {
         send: (msg: string) => MessageActions.sendMessage(channelId, { content: msg, __autoNoteProcessed: true }),
         delete: (messageId: string) => MessageActions.deleteMessage?.(channelId, messageId),
         edit: (messageId: string, msg: string) => MessageActions.editMessage?.(channelId, messageId, { content: msg }),
-        sendClyde: (text: string) => {
-            try {
-                return MessageActions.sendClydeError(channelId, text);
-            } catch(e) {
-                console.error("[AutoNote] sendClydeError failed:", e);
-            }
-        },
         copy: (text: string) => Clipboard?.setString?.(text),
         runAfter: (cb: (id: string) => void) => afterCallbacks.push(cb)
     };
@@ -196,8 +186,6 @@ patches.push(instead("sendMessage", MessageActions, (args, orig) => {
     const result = addAutoNote(message.content, storage.notes, utils);
     
     if (result === null) {
-        console.log("[AutoNote] Message send blocked by script.");
-        // Return a dummy message object to prevent Discord from crashing when it tries to read the result
         return Promise.resolve({
             id: "0",
             channel_id: channelId,
@@ -306,7 +294,7 @@ export const settings = () => {
                   })
               )
             ),
-            React.createElement(TouchableOpacity, { style: styles.deleteButton, onPress: () => h(e.id) },
+            React.createElement(TouchableOpacity, { style: styles.deleteButton, onPress: () => deleteNote(note.id) },
               React.createElement(Text, { style: styles.buttonText }, "Delete Profile")
             )
           )
@@ -319,7 +307,7 @@ export const settings = () => {
         React.createElement(TableRow, { label: "Placeholders", subLabel: "{trigger}, {time}, {date}", disabled: true }),
         React.createElement(TableRow, {
             label: "Script Context",
-            subLabel: "content, note, storage, utils (send, delete, edit, sendClyde, copy, runAfter).",
+            subLabel: "content, note, storage, utils (send, delete, edit, copy, runAfter). Return null to cancel.",
             disabled: true,
         })
       )
