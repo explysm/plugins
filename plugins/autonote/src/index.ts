@@ -127,7 +127,7 @@ function applyStyle(text: string, style: NoteStyle): string {
   }
 }
 
-async function processPlaceholders(text: string, triggerMatch: string, content: string): Promise<string> {
+function processPlaceholders(text: string, triggerMatch: string, content: string): Promise<string> {
   const now = new Date();
   let result = text
     .replace(/{trigger}/g, triggerMatch)
@@ -142,24 +142,36 @@ async function processPlaceholders(text: string, triggerMatch: string, content: 
   });
 
   // Handle {clipboard}
-  if (result.includes("{clipboard}")) {
-      const clip = await Clipboard?.getString?.() || "";
-      result = result.replace(/{clipboard}/g, clip);
-  }
+  const handleClipboard = (resText: string): Promise<string> => {
+      if (resText.includes("{clipboard}")) {
+          return Promise.resolve(Clipboard?.getString?.() || "").then(clip => {
+              return resText.replace(/{clipboard}/g, clip);
+          });
+      }
+      return Promise.resolve(resText);
+  };
 
   // Handle {api:url}
-  const apiMatches = result.match(/{api:([^}]+)}/g);
-  if (apiMatches) {
-      for (const match of apiMatches) {
-          try {
+  const handleAPI = (resText: string): Promise<string> => {
+      const apiMatches = resText.match(/{api:([^}]+)}/g);
+      if (!apiMatches) return Promise.resolve(resText);
+      
+      let p = Promise.resolve(resText);
+      apiMatches.forEach(match => {
+          p = p.then(current => {
               const url = match.slice(5, -1);
-              const res = await fetch(url).then(r => r.text());
-              result = result.replace(match, res.slice(0, 500)); // Limit response length
-          } catch(e) { console.error("[AutoNote] API fetch failed:", e); }
-      }
-  }
+              return fetch(url).then(r => r.text()).then(textRes => {
+                  return current.replace(match, textRes.slice(0, 500));
+              }).catch(e => {
+                  console.error("[AutoNote] API fetch failed:", e);
+                  return current;
+              });
+          });
+      });
+      return p;
+  };
 
-  return result;
+  return handleClipboard(result).then(handleAPI);
 }
 
 function isScoped(note: AutoNote, channelId: string): boolean {
@@ -174,76 +186,91 @@ function isScoped(note: AutoNote, channelId: string): boolean {
     return true;
 }
 
-async function addAutoNote(content: string, notes: AutoNote[], utils: any, channelId: string): Promise<string | null> {
+function addAutoNote(content: string, notes: AutoNote[], utils: any, channelId: string): Promise<string | null> {
   let newContent = content;
   let matchedSpecific = false;
 
-  const runScript = async (note: AutoNote, currentContent: string) => {
-    if (!note.script) return currentContent;
+  const runScript = (note: AutoNote, currentContent: string) => {
+    if (!note.script) return Promise.resolve(currentContent);
     try {
       note.data ??= {};
-      const scriptFn = new Function("content", "note", "utils", "storage", `return (async () => { ${note.script} })();`);
-      const result = await scriptFn(currentContent, note, utils, note.data);
-      if (result === null) return null;
-      return typeof result === "string" ? result : currentContent;
+      // Wrap script in a function that returns the result, possibly as a Promise
+      const scriptFn = new Function("content", "note", "utils", "storage", note.script);
+      return Promise.resolve(scriptFn(currentContent, note, utils, note.data)).then(result => {
+          if (result === null) return null;
+          return typeof result === "string" ? result : currentContent;
+      }).catch(e => {
+          console.error("[AutoNote] Script error in profile " + (note.trigger || "default") + ":", e);
+          return currentContent;
+      });
     } catch (e) {
       console.error("[AutoNote] Script error in profile " + (note.trigger || "default") + ":", e);
-      return currentContent;
+      return Promise.resolve(currentContent);
     }
   };
 
   const safeNotes = Array.isArray(notes) ? notes : [];
+  let p = Promise.resolve(newContent as string | null);
 
   for (const note of safeNotes) {
-    if (!note.enabled || !note.trigger || !isScoped(note, channelId)) continue;
-    
-    let match: RegExpMatchArray | null = null;
-    let triggerRegex: RegExp;
+    p = p.then(current => {
+        if (current === null || !note.enabled || !note.trigger || !isScoped(note, channelId)) return current;
+        
+        let match: RegExpMatchArray | null = null;
+        let triggerRegex: RegExp;
 
-    if (note.isRegex) {
-        try {
-            triggerRegex = new RegExp(note.trigger, "i");
-            match = newContent.match(triggerRegex);
-        } catch(e) { console.error("[AutoNote] Invalid regex:", e); continue; }
-    } else {
-        const escapedTrigger = note.trigger.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        triggerRegex = new RegExp("^" + escapedTrigger + "\\b", "i");
-        match = newContent.match(triggerRegex);
-    }
+        if (note.isRegex) {
+            try {
+                triggerRegex = new RegExp(note.trigger, "i");
+                match = current.match(triggerRegex);
+            } catch(e) { console.error("[AutoNote] Invalid regex:", e); return current; }
+        } else {
+            const escapedTrigger = note.trigger.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            triggerRegex = new RegExp("^" + escapedTrigger + "\\b", "i");
+            match = current.match(triggerRegex);
+        }
 
-    if (!match) continue;
+        if (!match) return current;
 
-    matchedSpecific = true;
-    const matchedText = match[0];
-    if (note.removeTrigger) {
-      newContent = newContent.replace(triggerRegex, "").trim();
-    }
+        matchedSpecific = true;
+        const matchedText = match[0];
+        let processedContent = current;
+        if (note.removeTrigger) {
+          processedContent = current.replace(triggerRegex, "").trim();
+        }
 
-    const scriptResult = await runScript(note, newContent);
-    if (scriptResult === null) return null;
-    newContent = scriptResult;
-
-    let addedText = await processPlaceholders(note.footer || "", matchedText, newContent);
-    addedText = applyStyle(addedText, note.style || "none");
-    const position = note.position || "bottom";
-    newContent = position === "top" ? addedText + "\n" + newContent : newContent + "\n" + addedText;
+        return runScript(note, processedContent).then(scriptResult => {
+            if (scriptResult === null) return null;
+            return processPlaceholders(note.footer || "", matchedText, scriptResult).then(addedText => {
+                const position = note.position || "bottom";
+                const styledText = applyStyle(addedText, note.style || "none");
+                return position === "top" ? styledText + "\n" + scriptResult : scriptResult + "\n" + styledText;
+            });
+        });
+    });
   }
 
-  if (!matchedSpecific) {
-    for (const note of safeNotes) {
-      if (!note.enabled || note.trigger || !isScoped(note, channelId)) continue;
-      const scriptResult = await runScript(note, newContent);
-      if (scriptResult === null) return null;
-      newContent = scriptResult;
+  p = p.then(current => {
+      if (current === null || matchedSpecific) return current;
+      
+      let pFallback = Promise.resolve(current as string | null);
+      for (const note of safeNotes) {
+        pFallback = pFallback.then(curr => {
+            if (curr === null || !note.enabled || note.trigger || !isScoped(note, channelId)) return curr;
+            return runScript(note, curr).then(scriptResult => {
+                if (scriptResult === null) return null;
+                return processPlaceholders(note.footer || "", "", scriptResult).then(addedText => {
+                    const position = note.position || "bottom";
+                    const styledText = applyStyle(addedText, note.style || "none");
+                    return position === "top" ? styledText + "\n" + scriptResult : scriptResult + "\n" + styledText;
+                });
+            });
+        });
+      }
+      return pFallback;
+  });
 
-      let addedText = await processPlaceholders(note.footer || "", "", newContent);
-      addedText = applyStyle(addedText, note.style || "none");
-      const position = note.position || "bottom";
-      newContent = position === "top" ? addedText + "\n" + newContent : newContent + "\n" + addedText;
-    }
-  }
-
-  return newContent;
+  return p;
 }
 
 // Default settings
@@ -264,7 +291,7 @@ storage.notes ??= [
 const patches = [];
 
 // Use INSTEAD to allow true cancellation
-patches.push(instead("sendMessage", MessageActions, async (args, orig) => {
+patches.push(instead("sendMessage", MessageActions, (args, orig) => {
     const channelId = args[0];
     const message = args[1];
     
@@ -282,35 +309,35 @@ patches.push(instead("sendMessage", MessageActions, async (args, orig) => {
         runAfter: (cb: (id: string) => void) => afterCallbacks.push(cb)
     };
 
-    const result = await addAutoNote(message.content, storage.notes, utils, channelId);
-    
-    if (result === null) {
-        return Promise.resolve({
-            id: "0",
-            channel_id: channelId,
-            content: "",
-            author: { id: "0", username: "Clyde" },
-            attachments: [],
-            embeds: [],
-            mentions: [],
-            timestamp: new Date().toISOString()
-        });
-    }
+    return addAutoNote(message.content, storage.notes, utils, channelId).then(result => {
+        if (result === null) {
+            return {
+                id: "0",
+                channel_id: channelId,
+                content: "",
+                author: { id: "0", username: "Clyde" },
+                attachments: [],
+                embeds: [],
+                mentions: [],
+                timestamp: new Date().toISOString()
+            };
+        }
 
-    message.content = result;
-    const res = orig(...args);
+        message.content = result;
+        const res = orig(...args);
 
-    if (afterCallbacks.length > 0 && res && typeof res.then === "function") {
-        res.then((msg: any) => {
-            const id = msg?.id || msg?.body?.id || msg?.message?.id;
-            if (id) {
-                afterCallbacks.forEach((cb: any) => {
-                    try { cb(id); } catch(e) { console.error("[AutoNote] runAfter callback error:", e); }
-                });
-            }
-        }).catch((e: any) => console.error("[AutoNote] sendMessage promise failed:", e));
-    }
-    return res;
+        if (afterCallbacks.length > 0 && res && typeof res.then === "function") {
+            res.then((msg: any) => {
+                const id = msg?.id || msg?.body?.id || msg?.message?.id;
+                if (id) {
+                    afterCallbacks.forEach((cb: any) => {
+                        try { cb(id); } catch(e) { console.error("[AutoNote] runAfter callback error:", e); }
+                    });
+                }
+            }).catch((e: any) => console.error("[AutoNote] sendMessage promise failed:", e));
+        }
+        return res;
+    });
 }));
 
 export const onUnload = () => patches.forEach(p => p());
@@ -357,14 +384,15 @@ export const settings = () => {
       Clipboard?.setString?.(data);
   };
 
-  const importProfile = async () => {
-      try {
-          const data = await Clipboard?.getString?.();
+  const importProfile = () => {
+      Promise.resolve(Clipboard?.getString?.() || "").then(data => {
           if (!data) return;
-          const profile = JSON.parse(atob(data));
-          delete profile.id; // Generate new ID
-          addNote(profile);
-      } catch(e) { console.error("[AutoNote] Import failed:", e); }
+          try {
+              const profile = JSON.parse(atob(data));
+              delete profile.id; // Generate new ID
+              addNote(profile);
+          } catch(e) { console.error("[AutoNote] Import failed:", e); }
+      });
   };
 
   if (!TableRowGroup || !TableSwitchRow || !TableRow || !Stack || !TextInput) {
