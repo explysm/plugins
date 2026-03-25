@@ -125,10 +125,11 @@ function addAutoNote(content: string, notes: AutoNote[]): string {
     }
 
     // Process text
-    let addedText = processPlaceholders(note.footer, matchedText);
-    addedText = applyStyle(addedText, note.style);
+    let addedText = processPlaceholders(note.footer || "", matchedText);
+    addedText = applyStyle(addedText, note.style || "none");
 
-    if (note.position === "top") {
+    const position = note.position || "bottom";
+    if (position === "top") {
       newContent = addedText + "\n" + newContent;
     } else {
       newContent = newContent + "\n" + addedText;
@@ -152,10 +153,11 @@ function addAutoNote(content: string, notes: AutoNote[]): string {
       }
 
       // Process text
-      let addedText = processPlaceholders(note.footer, "");
-      addedText = applyStyle(addedText, note.style);
+      let addedText = processPlaceholders(note.footer || "", "");
+      addedText = applyStyle(addedText, note.style || "none");
 
-      if (note.position === "top") {
+      const position = note.position || "bottom";
+      if (position === "top") {
         newContent = addedText + "\n" + newContent;
       } else {
         newContent = newContent + "\n" + addedText;
@@ -189,7 +191,18 @@ const unpatch = after("sendMessage", MessageActions, (args) => {
 export const onUnload = () => unpatch();
 
 export const settings = () => {
-  const [notes, setNotes] = React.useState<AutoNote[]>([...storage.notes]);
+  const [notes, setNotes] = React.useState<AutoNote[]>(() => {
+      // Migration: Ensure all notes have required fields
+      const currentNotes = [...(storage.notes || [])];
+      let changed = false;
+      currentNotes.forEach(n => {
+          if (!n.style) { n.style = "none"; changed = true; }
+          if (!n.position) { n.position = "bottom"; changed = true; }
+      });
+      if (changed) storage.notes = currentNotes;
+      return currentNotes;
+  });
+  
   const [collapsed, setCollapsed] = React.useState<Record<string, boolean>>({});
 
   const toggleCollapsed = (id: string) => {
@@ -270,15 +283,15 @@ export const settings = () => {
               }),
               React.createElement(TableRow, {
                 label: "Position",
-                subLabel: `Currently at: ${note.position.toUpperCase()}`,
-                onPress: () => updateNote(note.id, { position: note.position === "top" ? "bottom" : "top" }),
+                subLabel: `Currently at: ${(note.position || "bottom").toUpperCase()}`,
+                onPress: () => updateNote(note.id, { position: (note.position || "bottom") === "top" ? "bottom" : "top" }),
               }),
               React.createElement(TableRow, {
                 label: "Style",
-                subLabel: `Current: ${note.style.toUpperCase()}`,
+                subLabel: `Current: ${(note.style || "none").toUpperCase()}`,
                 onPress: () => {
                   const styles: NoteStyle[] = ["none", "subtext", "blockquote", "code"];
-                  const currentIndex = styles.indexOf(note.style);
+                  const currentIndex = styles.indexOf(note.style || "none");
                   updateNote(note.id, { style: styles[(currentIndex + 1) % styles.length] });
                 },
               }),
