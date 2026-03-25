@@ -7,6 +7,7 @@ const { ScrollView, Text, TouchableOpacity, StyleSheet, View } = ReactNative;
 
 // Find message actions
 const MessageActions = findByProps("sendMessage", "receiveMessage");
+console.log("[AutoNote] MessageActions keys:", Object.keys(MessageActions || {}));
 
 // UI Components
 const TableRowGroup = findByProps("TableRowGroup")?.TableRowGroup;
@@ -188,18 +189,31 @@ patches.push(before("sendMessage", MessageActions, (args) => {
     const channelId = args[0];
     const message = args[1];
     
+    // Prevent recursion
+    if (message?.__autoNoteProcessed) return args;
+    
     if (message?.content) {
         const afterCallbacks: ((id: string) => void)[] = [];
         const utils = {
-            send: (msg: string) => MessageActions.sendMessage(channelId, { content: msg }),
-            delete: (messageId: string) => MessageActions.deleteMessage(channelId, messageId),
+            send: (msg: string) => {
+                return MessageActions.sendMessage(channelId, { content: msg, __autoNoteProcessed: true });
+            },
+            delete: (messageId: string) => {
+                if (MessageActions.deleteMessage) {
+                    return MessageActions.deleteMessage(channelId, messageId);
+                }
+            },
+            edit: (messageId: string, msg: string) => {
+                if (MessageActions.editMessage) {
+                    return MessageActions.editMessage(channelId, messageId, { content: msg });
+                }
+            },
             runAfter: (cb: (id: string) => void) => afterCallbacks.push(cb)
         };
 
         message.content = addAutoNote(message.content, storage.notes, utils);
         
         if (afterCallbacks.length > 0) {
-            // Store callbacks on args to retrieve in 'after' patch
             (args as any).__autoNoteCallbacks = afterCallbacks;
         }
     }
@@ -211,7 +225,8 @@ patches.push(after("sendMessage", MessageActions, (args, res) => {
     const callbacks = (args as any).__autoNoteCallbacks;
     if (callbacks && res && typeof res.then === "function") {
         res.then((msg: any) => {
-            const id = msg?.id || msg?.body?.id;
+            // Confirming 'id' is the primary key as per raw JSON
+            const id = msg?.id || msg?.body?.id || msg?.message?.id;
             if (id) {
                 callbacks.forEach((cb: any) => {
                     try { cb(id); } catch(e) { console.error("[AutoNote] runAfter callback error:", e); }
@@ -372,7 +387,7 @@ export const settings = () => {
         }),
         React.createElement(TableRow, {
             label: "Script Context",
-            subLabel: "Variables: content (string), note (object), utils (send, delete, runAfter). Return new content.",
+            subLabel: "Variables: content (string), note (object), utils (send, delete, edit, runAfter). Return new content.",
             disabled: true,
         })
       )
