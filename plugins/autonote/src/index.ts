@@ -3,7 +3,7 @@ import { React, ReactNative } from "@vendetta/metro/common";
 import { after } from "@vendetta/patcher";
 import { storage } from "@vendetta/plugin";
 
-const { ScrollView, Text, TouchableOpacity, StyleSheet } = ReactNative;
+const { ScrollView, Text, TouchableOpacity, StyleSheet, View } = ReactNative;
 
 // Find message actions
 const MessageActions = findByProps("sendMessage", "receiveMessage");
@@ -14,9 +14,9 @@ const TableRow = findByProps("TableRow")?.TableRow;
 const TableSwitchRow = findByProps("TableSwitchRow")?.TableSwitchRow;
 const Stack = findByProps("Stack")?.Stack;
 const TextInput = findByProps("TextInput")?.TextInput;
-const Button = findByProps("Button")?.default || findByProps("Button");
 
 type NoteStyle = "none" | "subtext" | "blockquote" | "code";
+type NotePosition = "top" | "bottom";
 
 interface AutoNote {
   id: string;
@@ -25,6 +25,8 @@ interface AutoNote {
   footer: string;
   removeTrigger: boolean;
   style: NoteStyle;
+  position: NotePosition;
+  script?: string;
 }
 
 const styles = StyleSheet.create({
@@ -34,12 +36,18 @@ const styles = StyleSheet.create({
     padding: 12,
     marginBottom: 12,
   },
+  headerRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 4,
+  },
   deleteButton: {
     backgroundColor: "#ed4245",
     padding: 8,
     borderRadius: 4,
     alignItems: "center",
-    marginTop: 8,
+    marginTop: 12,
   },
   addButton: {
     backgroundColor: "#5865f2",
@@ -52,6 +60,14 @@ const styles = StyleSheet.create({
     color: "white",
     fontWeight: "bold",
   },
+  scriptInput: {
+     fontFamily: "monospace",
+     fontSize: 12,
+     backgroundColor: "rgba(0,0,0,0.2)",
+     borderRadius: 4,
+     padding: 8,
+     color: "#ccc",
+  }
 });
 
 function applyStyle(text: string, style: NoteStyle): string {
@@ -77,7 +93,9 @@ function processPlaceholders(text: string, triggerMatch: string): string {
 
 function addAutoNote(content: string, notes: AutoNote[]): string {
   let newContent = content;
+  let matchedSpecific = false;
 
+  // First pass: Process specific triggers
   for (const note of notes) {
     if (!note.enabled || !note.trigger) continue;
 
@@ -87,6 +105,7 @@ function addAutoNote(content: string, notes: AutoNote[]): string {
     const match = newContent.match(triggerRegex);
     if (!match) continue;
 
+    matchedSpecific = true;
     const matchedText = match[0];
 
     // Optionally remove the trigger
@@ -94,12 +113,54 @@ function addAutoNote(content: string, notes: AutoNote[]): string {
       newContent = newContent.replace(triggerRegex, "").trim();
     }
 
-    // Process footer
-    let footer = processPlaceholders(note.footer, matchedText);
-    footer = applyStyle(footer, note.style);
+    // Execute script
+    if (note.script) {
+      try {
+        const scriptFn = new Function("content", "note", note.script);
+        const result = scriptFn(newContent, note);
+        if (typeof result === "string") newContent = result;
+      } catch (e) {
+        console.error("[AutoNote] Script error:", e);
+      }
+    }
 
-    // Add AutoNote footer
-    newContent += "\n" + footer;
+    // Process text
+    let addedText = processPlaceholders(note.footer, matchedText);
+    addedText = applyStyle(addedText, note.style);
+
+    if (note.position === "top") {
+      newContent = addedText + "\n" + newContent;
+    } else {
+      newContent = newContent + "\n" + addedText;
+    }
+  }
+
+  // Second pass: Process "empty" triggers only if no specific trigger matched
+  if (!matchedSpecific) {
+    for (const note of notes) {
+      if (!note.enabled || note.trigger) continue;
+
+      // Execute script
+      if (note.script) {
+        try {
+          const scriptFn = new Function("content", "note", note.script);
+          const result = scriptFn(newContent, note);
+          if (typeof result === "string") newContent = result;
+        } catch (e) {
+          console.error("[AutoNote] Script error:", e);
+        }
+      }
+
+      // Process text
+      let addedText = processPlaceholders(note.footer, "");
+      addedText = applyStyle(addedText, note.style);
+
+      if (note.position === "top") {
+        newContent = addedText + "\n" + newContent;
+      } else {
+        newContent = newContent + "\n" + addedText;
+      }
+    }
   }
 
   return newContent;
@@ -114,6 +175,7 @@ storage.notes ??= [
     footer: "This was sent as a {trigger} message to avoid annoyance",
     removeTrigger: false,
     style: "subtext",
+    position: "bottom",
   },
 ];
 
@@ -128,6 +190,11 @@ export const onUnload = () => unpatch();
 
 export const settings = () => {
   const [notes, setNotes] = React.useState<AutoNote[]>([...storage.notes]);
+  const [collapsed, setCollapsed] = React.useState<Record<string, boolean>>({});
+
+  const toggleCollapsed = (id: string) => {
+    setCollapsed(prev => ({ ...prev, [id]: !prev[id] }));
+  };
 
   const updateNotes = (newNotes: AutoNote[]) => {
     storage.notes = newNotes;
@@ -142,6 +209,7 @@ export const settings = () => {
       footer: "",
       removeTrigger: false,
       style: "none",
+      position: "bottom",
     };
     updateNotes([...notes, newNote]);
   };
@@ -154,95 +222,101 @@ export const settings = () => {
     updateNotes(notes.map((n) => (n.id === id ? { ...n, ...partial } : n)));
   };
 
-  // Fallback if components are missing
   if (!TableRowGroup || !TableSwitchRow || !TableRow || !Stack || !TextInput) {
-    return React.createElement(
-      ScrollView,
-      { style: { flex: 1, padding: 12 } },
-      React.createElement(
-        Text,
-        { style: { color: "white" } },
-        "AutoNote UI unavailable (missing components).",
-      ),
+    return React.createElement(ScrollView, { style: { flex: 1, padding: 12 } },
+      React.createElement(Text, { style: { color: "white" } }, "AutoNote UI unavailable (missing components).")
     );
   }
 
-  return React.createElement(
-    ScrollView,
-    { style: { flex: 1 } },
-    React.createElement(
-      Stack,
-      { spacing: 8, style: { padding: 10 } },
+  return React.createElement(ScrollView, { style: { flex: 1 } },
+    React.createElement(Stack, { spacing: 8, style: { padding: 10 } },
       notes.map((note) =>
-        React.createElement(
-          ReactNative.View,
-          { key: note.id, style: styles.card },
-          React.createElement(
-            TableRowGroup,
-            { title: `Note: ${note.trigger || "(no trigger)"}` },
-            React.createElement(TableSwitchRow, {
-              label: "Enabled",
-              value: note.enabled,
-              onValueChange: (v: boolean) => updateNote(note.id, { enabled: v }),
-            }),
-            React.createElement(TextInput, {
-              label: "Trigger Keyword",
-              placeholder: "@silent",
-              value: note.trigger,
-              onChange: (v: string) => updateNote(note.id, { trigger: v }),
-            }),
-            React.createElement(TextInput, {
-              label: "Footer Text",
-              placeholder: "Enter footer text...",
-              value: note.footer,
-              onChange: (v: string) => updateNote(note.id, { footer: v }),
-            }),
-            React.createElement(TableSwitchRow, {
-              label: "Remove trigger from message",
-              value: note.removeTrigger,
-              onValueChange: (v: boolean) =>
-                updateNote(note.id, { removeTrigger: v }),
-            }),
-            React.createElement(TableRow, {
-              label: "Style",
-              subLabel: `Current: ${note.style}`,
-              onPress: () => {
-                const styles: NoteStyle[] = [
-                  "none",
-                  "subtext",
-                  "blockquote",
-                  "code",
-                ];
-                const currentIndex = styles.indexOf(note.style);
-                const nextIndex = (currentIndex + 1) % styles.length;
-                updateNote(note.id, { style: styles[nextIndex] });
+        React.createElement(View, { key: note.id, style: styles.card },
+          React.createElement(TouchableOpacity, { 
+            onPress: () => toggleCollapsed(note.id),
+            style: styles.headerRow 
+          },
+            React.createElement(Text, { style: { color: "white", fontWeight: "bold", fontSize: 16 } }, 
+              `${collapsed[note.id] ? "▶" : "▼"} ${note.trigger ? "Trigger: " + note.trigger : "Global Default (Fallback)"}`
+            ),
+            React.createElement(Text, { style: { color: note.enabled ? "#43b581" : "#f04747", fontSize: 12 } }, 
+                note.enabled ? "ACTIVE" : "DISABLED"
+            )
+          ),
+          
+          !collapsed[note.id] && React.createElement(View, { style: { marginTop: 10 } },
+            React.createElement(TableRowGroup, null,
+              React.createElement(TableSwitchRow, {
+                label: "Enabled",
+                value: note.enabled,
+                onValueChange: (v: boolean) => updateNote(note.id, { enabled: v }),
+              }),
+              React.createElement(TextInput, {
+                label: "Trigger Keyword",
+                placeholder: "Leave empty for every message...",
+                value: note.trigger,
+                onChange: (v: string) => updateNote(note.id, { trigger: v }),
+              }),
+              React.createElement(TextInput, {
+                label: "Note Text",
+                placeholder: "Enter text...",
+                value: note.footer,
+                onChange: (v: string) => updateNote(note.id, { footer: v }),
+              }),
+              React.createElement(TableSwitchRow, {
+                label: "Remove trigger from message",
+                value: note.removeTrigger,
+                onValueChange: (v: boolean) => updateNote(note.id, { removeTrigger: v }),
+              }),
+              React.createElement(TableRow, {
+                label: "Position",
+                subLabel: `Currently at: ${note.position.toUpperCase()}`,
+                onPress: () => updateNote(note.id, { position: note.position === "top" ? "bottom" : "top" }),
+              }),
+              React.createElement(TableRow, {
+                label: "Style",
+                subLabel: `Current: ${note.style.toUpperCase()}`,
+                onPress: () => {
+                  const styles: NoteStyle[] = ["none", "subtext", "blockquote", "code"];
+                  const currentIndex = styles.indexOf(note.style);
+                  updateNote(note.id, { style: styles[(currentIndex + 1) % styles.length] });
+                },
+              }),
+              React.createElement(View, { style: { padding: 16 } },
+                  React.createElement(Text, { style: { color: "#bbb", marginBottom: 8, fontSize: 12 } }, "Custom Script (JS)"),
+                  React.createElement(TextInput, {
+                    placeholder: "return content + '...';",
+                    multiline: true,
+                    value: note.script || "",
+                    onChange: (v: string) => updateNote(note.id, { script: v }),
+                    style: styles.scriptInput
+                  })
+              )
+            ),
+            React.createElement(TouchableOpacity, {
+                style: styles.deleteButton,
+                onPress: () => deleteNote(note.id),
               },
-            }),
-          ),
-          React.createElement(
-            TouchableOpacity,
-            {
-              style: styles.deleteButton,
-              onPress: () => deleteNote(note.id),
-            },
-            React.createElement(Text, { style: styles.buttonText }, "Delete Note"),
-          ),
-        ),
+              React.createElement(Text, { style: styles.buttonText }, "Delete Profile")
+            )
+          )
+        )
       ),
-      React.createElement(
-        TouchableOpacity,
-        { style: styles.addButton, onPress: addNote },
-        React.createElement(Text, { style: styles.buttonText }, "+ Add New Note"),
+      React.createElement(TouchableOpacity, { style: styles.addButton, onPress: addNote },
+        React.createElement(Text, { style: styles.buttonText }, "+ Add New Profile")
       ),
-      React.createElement(
-        TableRowGroup,
-        { title: "Info" },
+      React.createElement(TableRowGroup, { title: "Info" },
         React.createElement(TableRow, {
           label: "Placeholders",
           subLabel: "{trigger}, {time}, {date}",
           disabled: true,
         }),
-      ),
-    ),
+        React.createElement(TableRow, {
+            label: "Script Context",
+            subLabel: "Variables: content (string), note (object). Return new content.",
+            disabled: true,
+        })
+      )
+    )
   );
 };

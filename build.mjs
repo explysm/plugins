@@ -19,13 +19,15 @@ const plugins = [
     }),
 ];
 
-for (let plug of await readdir("./plugins")) {
-    const manifest = JSON.parse(await readFile(`./plugins/${plug}/manifest.json`));
-    const outPath = `./dist/${plug}/index.js`;
+for (let plug of await readdir("./plugins", { withFileTypes: true })) {
+    if (!plug.isDirectory()) continue;
+    const name = plug.name;
+    const manifest = JSON.parse(await readFile(`./plugins/${name}/manifest.json`));
+    const outPath = `./dist/${name}/index.js`;
 
     try {
         const bundle = await rollup({
-            input: `./plugins/${plug}/${manifest.main}`,
+            input: `./plugins/${name}/${manifest.main}`,
             onwarn: () => {},
             plugins,
         });
@@ -49,11 +51,11 @@ for (let plug of await readdir("./plugins")) {
         const toHash = await readFile(outPath);
         manifest.hash = createHash("sha256").update(toHash).digest("hex");
         manifest.main = "index.js";
-        await writeFile(`./dist/${plug}/manifest.json`, JSON.stringify(manifest));
+        await writeFile(`./dist/${name}/manifest.json`, JSON.stringify(manifest));
     
         console.log(`Successfully built ${manifest.name}!`);
     } catch (e) {
-        console.error("Failed to build plugin...", e);
+        console.error(`Failed to build plugin ${name}...`, e);
         process.exit(1);
     }
 }
