@@ -74,8 +74,9 @@ return content;
 Uses `utils.fetch` to retrieve data from an external API and append it to your message.
 **Script:**
 ```javascript
-const quote = await utils.fetch("https://api.quotable.io/random")
-    .then(r => r.json());
-
-return content + `\n\n> ${quote.content} — ${quote.author}`;
+return utils.fetch("https://api.quotable.io/random")
+    .then(r => r.json())
+    .then(quote => {
+        return content + `\n\n> ${quote.content} — ${quote.author}`;
+    });
 ```

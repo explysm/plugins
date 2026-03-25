@@ -55,8 +55,9 @@ return content;`,
   "Chaos Mode": `// Randomly swaps letters
 return content.split("").map(c => Math.random() > 0.8 ? c.toUpperCase() : c.toLowerCase()).join("");`,
   "API Example": `// Fetch data from an API
-const data = await utils.fetch("https://api.quotable.io/random").then(r => r.json());
-return content + "\\n\\n> " + data.content + " — " + data.author;`
+return utils.fetch("https://api.quotable.io/random")
+    .then(r => r.json())
+    .then(data => content + "\n\n> " + data.content + " — " + data.author);`
 };
 
 const styles = StyleSheet.create({
@@ -362,6 +363,7 @@ export const settings = () => {
   });
   const [selectingStyle, setSelectingStyle] = React.useState<string | null>(null);
   const [modalScript, setModalScript] = React.useState<{id: string, code: string} | null>(null);
+  const [showTemplates, setShowTemplates] = React.useState<string | null>(null); // profile id
 
   const toggleCollapsed = (id: string) => setCollapsed(prev => ({ ...prev, [id]: !prev[id] }));
   const toggleSelectingStyle = (id: string) => setSelectingStyle(prev => (prev === id ? null : id));
@@ -380,15 +382,20 @@ export const settings = () => {
   const updateNote = (id: string, partial: Partial<AutoNote>) => updateNotes(notes.map((n) => (n.id === id ? { ...n, ...partial } : n)));
 
   const exportProfile = (note: AutoNote) => {
-      const data = btoa(JSON.stringify(note));
-      Clipboard?.setString?.(data);
+      try {
+          // UTF-8 safe base64
+          const json = JSON.stringify(note);
+          const data = btoa(encodeURIComponent(json).replace(/%([0-9A-F]{2})/g, (match, p1) => String.fromCharCode(parseInt(p1, 16))));
+          Clipboard?.setString?.(data);
+      } catch(e) { console.error("[AutoNote] Export failed:", e); }
   };
 
   const importProfile = () => {
       Promise.resolve(Clipboard?.getString?.() || "").then(data => {
           if (!data) return;
           try {
-              const profile = JSON.parse(atob(data));
+              const json = decodeURIComponent(atob(data).split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join(''));
+              const profile = JSON.parse(json);
               delete profile.id; // Generate new ID
               addNote(profile);
           } catch(e) { console.error("[AutoNote] Import failed:", e); }
@@ -444,15 +451,7 @@ export const settings = () => {
                       React.createElement(TouchableOpacity, { style: [styles.secondaryButton, { flex: 1 }], onPress: () => setModalScript({ id: note.id, code: note.script || "" }) },
                           React.createElement(Text, { style: styles.buttonText }, "🖥️ Big Editor")
                       ),
-                      React.createElement(TouchableOpacity, { 
-                          style: [styles.secondaryButton, { flex: 1 }], 
-                          onPress: () => {
-                              const currentKeys = Object.keys(TEMPLATES);
-                              const idx = Math.floor(Math.random() * currentKeys.length);
-                              const name = currentKeys[idx];
-                              updateNote(note.id, { script: TEMPLATES[name] });
-                          } 
-                      },
+                      React.createElement(TouchableOpacity, { style: [styles.secondaryButton, { flex: 1 }], onPress: () => setShowTemplates(note.id) },
                           React.createElement(Text, { style: styles.buttonText }, "📚 Templates")
                       )
                   ),
@@ -500,6 +499,35 @@ export const settings = () => {
                 } 
             },
                 React.createElement(Text, { style: styles.buttonText }, "SAVE & CLOSE")
+            )
+        )
+    ),
+
+    showTemplates && React.createElement(ReactNative.Modal, { visible: true, animationType: "fade", transparent: true },
+        React.createElement(View, { style: { flex: 1, backgroundColor: "rgba(0,0,0,0.8)", justifyContent: "center", padding: 20 } },
+            React.createElement(View, { style: { backgroundColor: "#2c2f33", borderRadius: 8, padding: 16, maxHeight: "80%" } },
+                React.createElement(Text, { style: [styles.modalHeader, { marginBottom: 16 }] }, "Select Template"),
+                React.createElement(ScrollView, null,
+                    Object.keys(TEMPLATES).map(name => 
+                        React.createElement(TouchableOpacity, { 
+                            key: name, 
+                            style: [styles.secondaryButton, { padding: 12, marginBottom: 8, alignItems: "flex-start" }],
+                            onPress: () => {
+                                updateNote(showTemplates, { script: TEMPLATES[name] });
+                                setShowTemplates(null);
+                            }
+                        },
+                            React.createElement(Text, { style: [styles.buttonText, { fontSize: 16 }] }, name),
+                            React.createElement(Text, { style: { color: "#aaa", fontSize: 12, marginTop: 4 } }, TEMPLATES[name].split("\n")[0].replace("// ", ""))
+                        )
+                    )
+                ),
+                React.createElement(TouchableOpacity, { 
+                    style: [styles.addButton, { marginTop: 16, marginBottom: 0 }], 
+                    onPress: () => setShowTemplates(null) 
+                },
+                    React.createElement(Text, { style: styles.buttonText }, "CANCEL")
+                )
             )
         )
     )
