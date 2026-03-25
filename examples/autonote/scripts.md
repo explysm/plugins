@@ -10,7 +10,7 @@ AutoNote allows running arbitrary JavaScript to manipulate message content and p
   - `send(text)`: Sends a new message to the current channel.
   - `delete(messageId)`: Deletes a message in the current channel.
   - `edit(messageId, text)`: Edits a message in the current channel.
-  - `toast(text)`: Shows a native system toast notification.
+  - `sendClyde(text)`: Sends a local system message (Clyde) that only you can see.
   - `copy(text)`: Copies text to the system clipboard.
   - `runAfter(callback)`: Registers a function to run **after** the message is sent. Receives the `messageId`.
 
@@ -19,11 +19,11 @@ AutoNote allows running arbitrary JavaScript to manipulate message content and p
 ## Examples
 
 ### 1. Simple Message Filter (Cancellation)
-Stop yourself from sending a message if it's too short or contains specific words. Returning `null` cancels the send.
+Stop yourself from sending a message if it's too short. Uses `sendClyde` to notify you locally why it failed.
 **Script:**
 ```javascript
 if (content.length < 5) {
-    utils.toast("Message too short!");
+    utils.sendClyde("Message too short! Minimum 5 characters.");
     return null;
 }
 return content;
@@ -50,12 +50,12 @@ return content;
 ```
 
 ### 4. Copy Message ID to Clipboard
-Automatically copies the ID of every message you send to your clipboard.
+Automatically copies the ID of every message you send to your clipboard and notifies you via Clyde.
 **Script:**
 ```javascript
 utils.runAfter((id) => {
     utils.copy(id);
-    utils.toast("ID copied to clipboard!");
+    utils.sendClyde("ID copied to clipboard: " + id);
 });
 return content;
 ```

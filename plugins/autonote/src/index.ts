@@ -7,11 +7,7 @@ const { ScrollView, Text, TouchableOpacity, StyleSheet, View } = ReactNative;
 
 // Find internal modules
 const MessageActions = findByProps("sendMessage", "receiveMessage");
-// Try multiple common toast locations
-const ToastModule = findByProps("showToast") || findByProps("openNativeToast") || findByProps("ToastStore");
-
-console.log("[AutoNote] MessageActions keys:", Object.keys(MessageActions || {}));
-console.log("[AutoNote] ToastModule keys:", Object.keys(ToastModule || {}));
+const Clipboard = findByProps("setString", "getString");
 
 // UI Components
 const TableRowGroup = findByProps("TableRowGroup")?.TableRowGroup;
@@ -180,11 +176,7 @@ patches.push(instead("sendMessage", MessageActions, (args, orig) => {
             send: (msg: string) => MessageActions.sendMessage(channelId, { content: msg, __autoNoteProcessed: true }),
             delete: (messageId: string) => MessageActions.deleteMessage?.(channelId, messageId),
             edit: (messageId: string, msg: string) => MessageActions.editMessage?.(channelId, messageId, { content: msg }),
-            toast: (text: string) => {
-                const show = ToastModule?.showToast || ToastModule?.openNativeToast || ToastModule?.show;
-                if (show) show(text);
-                else console.error("[AutoNote] Toast function not found");
-            },
+            sendClyde: (text: string) => MessageActions.sendClydeError?.(channelId, text),
             copy: (text: string) => Clipboard?.setString?.(text),
             runAfter: (cb: (id: string) => void) => afterCallbacks.push(cb)
         };
@@ -193,15 +185,12 @@ patches.push(instead("sendMessage", MessageActions, (args, orig) => {
         
         if (result === null) {
             console.log("[AutoNote] Message send blocked by script.");
-            return Promise.resolve(); // Return a resolved promise to satisfy Discord's expected return type
+            return Promise.resolve();
         }
 
         message.content = result;
-        
-        // Execute the original sendMessage
         const res = orig(...args);
 
-        // Handle callbacks
         if (afterCallbacks.length > 0 && res && typeof res.then === "function") {
             res.then((msg: any) => {
                 const id = msg?.id || msg?.body?.id || msg?.message?.id;
@@ -310,7 +299,7 @@ export const settings = () => {
         React.createElement(TableRow, { label: "Placeholders", subLabel: "{trigger}, {time}, {date}", disabled: true }),
         React.createElement(TableRow, {
             label: "Script Context",
-            subLabel: "content, note, utils (send, delete, edit, toast, copy, runAfter), storage. Return null to cancel send.",
+            subLabel: "content, note, storage, utils (send, delete, edit, sendClyde, copy, runAfter).",
             disabled: true,
         })
       )
