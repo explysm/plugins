@@ -1,6 +1,6 @@
 {
   "name": "AutoNote",
-  "description": "Plugin that adds a footer to @silent messages explaining that it was sent as a @silent message to avoid annoyance.",
+  "description": "Automatically adds custom footers to messages based on trigger keywords at the start of a message. Supports multiple profiles, placeholders, and styling.",
   "authors": [
     {
       "name": "explysm",
@@ -8,6 +8,7 @@
     }
   ],
   "main": "src/index.ts",
+  "version": "1.1.0",
   "vendetta": {
     "icon": "ic_emoji_24px"
   }
