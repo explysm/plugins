@@ -1,17 +1,44 @@
 # Custom JavaScript Scripts
 
-For power users, AutoNote allows running arbitrary JavaScript to manipulate your message content and perform actions before or after sending.
+AutoNote allows running arbitrary JavaScript to manipulate message content and perform actions before or after sending.
 
 ## Script Context
 - `content` (string): The current message string.
 - `note` (object): The profile object containing its settings.
+- `storage` (object): A persistent data object unique to this profile. Data saved here persists between messages.
 - `utils` (object):
   - `send(text)`: Sends a new message to the current channel.
   - `delete(messageId)`: Deletes a message in the current channel.
-  - `runAfter(callback)`: Registers a function to run **after** the current message has been successfully sent. The callback receives the `messageId` of the sent message.
+  - `edit(messageId, text)`: Edits a message in the current channel.
+  - `toast(text)`: Shows a native system toast notification.
+  - `copy(text)`: Copies text to the system clipboard.
+  - `runAfter(callback)`: Registers a function to run **after** the message is sent. Receives the `messageId`.
 
-## Example 1: Auto-Delete (Ninja Mode)
-Send a message that automatically deletes itself after 5 seconds.
+---
+
+## Examples
+
+### 1. Simple Message Filter (Cancellation)
+Stop yourself from sending a message if it's too short or contains specific words. Returning `null` cancels the send.
+**Script:**
+```javascript
+if (content.length < 5) {
+    utils.toast("Message too short!");
+    return null;
+}
+return content;
+```
+
+### 2. Message Counter (Persistence)
+Uses the `storage` object to remember how many messages you've sent with this trigger.
+**Script:**
+```javascript
+storage.count = (storage.count || 0) + 1;
+return content + `\n-# Total messages sent with this trigger: ${storage.count}`;
+```
+
+### 3. "Ninja" Mode (Auto-Delete)
+Sends a message that automatically deletes itself after 5 seconds.
 **Script:**
 ```javascript
 utils.runAfter((id) => {
@@ -22,24 +49,19 @@ utils.runAfter((id) => {
 return content;
 ```
 
-## Example 2: Self-Log ID
-Log the ID of the message you just sent.
+### 4. Copy Message ID to Clipboard
+Automatically copies the ID of every message you send to your clipboard.
 **Script:**
 ```javascript
 utils.runAfter((id) => {
-    utils.send("The message ID was: " + id);
+    utils.copy(id);
+    utils.toast("ID copied to clipboard!");
 });
 return content;
 ```
 
-## Example 3: Upper Case All
-**Script:**
-```javascript
-return content.toUpperCase();
-```
-
-## Example 4: Message Splitting
-If you want to split a long message into multiple parts:
+### 5. Message Splitting
+Automatically splits long messages (>2000 chars) into two separate messages.
 **Script:**
 ```javascript
 if (content.length > 2000) {

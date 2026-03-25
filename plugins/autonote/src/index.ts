@@ -5,9 +5,10 @@ import { storage } from "@vendetta/plugin";
 
 const { ScrollView, Text, TouchableOpacity, StyleSheet, View } = ReactNative;
 
-// Find message actions
+// Find internal modules
 const MessageActions = findByProps("sendMessage", "receiveMessage");
-console.log("[AutoNote] MessageActions keys:", Object.keys(MessageActions || {}));
+const Toasts = findByProps("showToast");
+const Clipboard = findByProps("setString", "getString");
 
 // UI Components
 const TableRowGroup = findByProps("TableRowGroup")?.TableRowGroup;
@@ -28,6 +29,7 @@ interface AutoNote {
   style: NoteStyle;
   position: NotePosition;
   script?: string;
+  data?: Record<string, any>; // Persistent data for scripts
 }
 
 const styles = StyleSheet.create({
@@ -92,9 +94,28 @@ function processPlaceholders(text: string, triggerMatch: string): string {
     .replace(/{date}/g, now.toLocaleDateString());
 }
 
-function addAutoNote(content: string, notes: AutoNote[], utils: any): string {
+function addAutoNote(content: string, notes: AutoNote[], utils: any): string | null {
   let newContent = content;
   let matchedSpecific = false;
+
+  // Helper to run scripts
+  const runScript = (note: AutoNote, currentContent: string) => {
+    if (!note.script) return currentContent;
+    try {
+      // Initialize persistent data if it doesn't exist
+      note.data ??= {};
+      
+      const scriptFn = new Function("content", "note", "utils", "storage", note.script);
+      const result = scriptFn(currentContent, note, utils, note.data);
+      
+      // If script returns null, it signals cancellation
+      if (result === null) return null;
+      return typeof result === "string" ? result : currentContent;
+    } catch (e) {
+      console.error("[AutoNote] Script error:", e);
+      return currentContent;
+    }
+  };
 
   // First pass: Process specific triggers
   for (const note of notes) {
@@ -109,60 +130,36 @@ function addAutoNote(content: string, notes: AutoNote[], utils: any): string {
     matchedSpecific = true;
     const matchedText = match[0];
 
-    // Optionally remove the trigger
     if (note.removeTrigger) {
       newContent = newContent.replace(triggerRegex, "").trim();
     }
 
     // Execute script
-    if (note.script) {
-      try {
-        const scriptFn = new Function("content", "note", "utils", note.script);
-        const result = scriptFn(newContent, note, utils);
-        if (typeof result === "string") newContent = result;
-      } catch (e) {
-        console.error("[AutoNote] Script error:", e);
-      }
-    }
+    const scriptResult = runScript(note, newContent);
+    if (scriptResult === null) return null;
+    newContent = scriptResult;
 
-    // Process text
     let addedText = processPlaceholders(note.footer || "", matchedText);
     addedText = applyStyle(addedText, note.style || "none");
 
     const position = note.position || "bottom";
-    if (position === "top") {
-      newContent = addedText + "\n" + newContent;
-    } else {
-      newContent = newContent + "\n" + addedText;
-    }
+    newContent = position === "top" ? addedText + "\n" + newContent : newContent + "\n" + addedText;
   }
 
-  // Second pass: Process "empty" triggers only if no specific trigger matched
+  // Second pass: Fallback triggers
   if (!matchedSpecific) {
     for (const note of notes) {
       if (!note.enabled || note.trigger) continue;
 
-      // Execute script
-      if (note.script) {
-        try {
-          const scriptFn = new Function("content", "note", "utils", note.script);
-          const result = scriptFn(newContent, note, utils);
-          if (typeof result === "string") newContent = result;
-        } catch (e) {
-          console.error("[AutoNote] Script error:", e);
-        }
-      }
+      const scriptResult = runScript(note, newContent);
+      if (scriptResult === null) return null;
+      newContent = scriptResult;
 
-      // Process text
       let addedText = processPlaceholders(note.footer || "", "");
       addedText = applyStyle(addedText, note.style || "none");
 
       const position = note.position || "bottom";
-      if (position === "top") {
-        newContent = addedText + "\n" + newContent;
-      } else {
-        newContent = newContent + "\n" + addedText;
-      }
+      newContent = position === "top" ? addedText + "\n" + newContent : newContent + "\n" + addedText;
     }
   }
 
@@ -179,39 +176,38 @@ storage.notes ??= [
     removeTrigger: false,
     style: "subtext",
     position: "bottom",
+    data: {}
   },
 ];
 
 const patches = [];
 
-// Patch BEFORE to modify content and register callbacks
 patches.push(before("sendMessage", MessageActions, (args) => {
     const channelId = args[0];
     const message = args[1];
     
-    // Prevent recursion
     if (message?.__autoNoteProcessed) return args;
     
     if (message?.content) {
         const afterCallbacks: ((id: string) => void)[] = [];
         const utils = {
-            send: (msg: string) => {
-                return MessageActions.sendMessage(channelId, { content: msg, __autoNoteProcessed: true });
-            },
-            delete: (messageId: string) => {
-                if (MessageActions.deleteMessage) {
-                    return MessageActions.deleteMessage(channelId, messageId);
-                }
-            },
-            edit: (messageId: string, msg: string) => {
-                if (MessageActions.editMessage) {
-                    return MessageActions.editMessage(channelId, messageId, { content: msg });
-                }
-            },
+            send: (msg: string) => MessageActions.sendMessage(channelId, { content: msg, __autoNoteProcessed: true }),
+            delete: (messageId: string) => MessageActions.deleteMessage?.(channelId, messageId),
+            edit: (messageId: string, msg: string) => MessageActions.editMessage?.(channelId, messageId, { content: msg }),
+            toast: (text: string) => Toasts?.showToast?.(text),
+            copy: (text: string) => Clipboard?.setString?.(text),
             runAfter: (cb: (id: string) => void) => afterCallbacks.push(cb)
         };
 
-        message.content = addAutoNote(message.content, storage.notes, utils);
+        const result = addAutoNote(message.content, storage.notes, utils);
+        
+        // If result is null, cancel the message send
+        if (result === null) {
+            console.log("[AutoNote] Message cancelled by script.");
+            return null; // Returning null in 'before' usually cancels the call
+        }
+
+        message.content = result;
         
         if (afterCallbacks.length > 0) {
             (args as any).__autoNoteCallbacks = afterCallbacks;
@@ -220,12 +216,10 @@ patches.push(before("sendMessage", MessageActions, (args) => {
     return args;
 }));
 
-// Patch AFTER to execute runAfter callbacks with the message ID
 patches.push(after("sendMessage", MessageActions, (args, res) => {
     const callbacks = (args as any).__autoNoteCallbacks;
     if (callbacks && res && typeof res.then === "function") {
         res.then((msg: any) => {
-            // Confirming 'id' is the primary key as per raw JSON
             const id = msg?.id || msg?.body?.id || msg?.message?.id;
             if (id) {
                 callbacks.forEach((cb: any) => {
@@ -245,26 +239,22 @@ export const settings = () => {
       currentNotes.forEach(n => {
           if (!n.style) { n.style = "none"; changed = true; }
           if (!n.position) { n.position = "bottom"; changed = true; }
+          if (!n.data) { n.data = {}; changed = true; }
       });
       if (changed) storage.notes = currentNotes;
       return currentNotes;
   });
   
-  const [collapsed, setCollapsed] = React.useState<Record<string, boolean>>({});
+  const [collapsed, setCollapsed] = React.useState<Record<string, boolean>>(() => {
+      const initial: Record<string, boolean> = {};
+      (storage.notes || []).forEach((n: any) => { initial[n.id] = true; });
+      return initial;
+  });
   const [selectingStyle, setSelectingStyle] = React.useState<string | null>(null);
 
-  const toggleCollapsed = (id: string) => {
-    setCollapsed(prev => ({ ...prev, [id]: !prev[id] }));
-  };
-
-  const toggleSelectingStyle = (id: string) => {
-    setSelectingStyle(prev => (prev === id ? null : id));
-  };
-
-  const updateNotes = (newNotes: AutoNote[]) => {
-    storage.notes = newNotes;
-    setNotes([...newNotes]);
-  };
+  const toggleCollapsed = (id: string) => setCollapsed(prev => ({ ...prev, [id]: !prev[id] }));
+  const toggleSelectingStyle = (id: string) => setSelectingStyle(prev => (prev === id ? null : id));
+  const updateNotes = (newNotes: AutoNote[]) => { storage.notes = newNotes; setNotes([...newNotes]); };
 
   const addNote = () => {
     const newNote: AutoNote = {
@@ -275,21 +265,17 @@ export const settings = () => {
       removeTrigger: false,
       style: "none",
       position: "bottom",
+      data: {}
     };
     updateNotes([...notes, newNote]);
   };
 
-  const deleteNote = (id: string) => {
-    updateNotes(notes.filter((n) => n.id !== id));
-  };
-
-  const updateNote = (id: string, partial: Partial<AutoNote>) => {
-    updateNotes(notes.map((n) => (n.id === id ? { ...n, ...partial } : n)));
-  };
+  const deleteNote = (id: string) => updateNotes(notes.filter((n) => n.id !== id));
+  const updateNote = (id: string, partial: Partial<AutoNote>) => updateNotes(notes.map((n) => (n.id === id ? { ...n, ...partial } : n)));
 
   if (!TableRowGroup || !TableSwitchRow || !TableRow || !Stack || !TextInput) {
     return React.createElement(ScrollView, { style: { flex: 1, padding: 12 } },
-      React.createElement(Text, { style: { color: "white" } }, "AutoNote UI unavailable (missing components).")
+      React.createElement(Text, { style: { color: "white" } }, "AutoNote UI unavailable.")
     );
   }
 
@@ -297,10 +283,7 @@ export const settings = () => {
     React.createElement(Stack, { spacing: 8, style: { padding: 10 } },
       notes.map((note) =>
         React.createElement(View, { key: note.id, style: styles.card },
-          React.createElement(TouchableOpacity, { 
-            onPress: () => toggleCollapsed(note.id),
-            style: styles.headerRow 
-          },
+          React.createElement(TouchableOpacity, { onPress: () => toggleCollapsed(note.id), style: styles.headerRow },
             React.createElement(Text, { style: { color: "white", fontWeight: "bold", fontSize: 16 } }, 
               `${collapsed[note.id] ? "▶" : "▼"} ${note.trigger ? "Trigger: " + note.trigger : "Global Default (Fallback)"}`
             ),
@@ -311,48 +294,19 @@ export const settings = () => {
           
           !collapsed[note.id] && React.createElement(View, { style: { marginTop: 10 } },
             React.createElement(TableRowGroup, null,
-              React.createElement(TableSwitchRow, {
-                label: "Enabled",
-                value: note.enabled,
-                onValueChange: (v: boolean) => updateNote(note.id, { enabled: v }),
-              }),
-              React.createElement(TextInput, {
-                label: "Trigger Keyword",
-                placeholder: "Leave empty for every message...",
-                value: note.trigger,
-                onChange: (v: string) => updateNote(note.id, { trigger: v }),
-              }),
-              React.createElement(TextInput, {
-                label: "Note Text",
-                placeholder: "Enter text...",
-                value: note.footer,
-                onChange: (v: string) => updateNote(note.id, { footer: v }),
-              }),
-              React.createElement(TableSwitchRow, {
-                label: "Remove trigger from message",
-                value: note.removeTrigger,
-                onValueChange: (v: boolean) => updateNote(note.id, { removeTrigger: v }),
-              }),
-              React.createElement(TableRow, {
-                label: "Position",
-                subLabel: `Currently at: ${(note.position || "bottom").toUpperCase()}`,
-                onPress: () => updateNote(note.id, { position: (note.position || "bottom") === "top" ? "bottom" : "top" }),
-              }),
-              React.createElement(TableRow, {
-                label: "Style",
-                subLabel: `Current: ${(note.style || "none").toUpperCase()}`,
-                onPress: () => toggleSelectingStyle(note.id),
-              }),
+              React.createElement(TableSwitchRow, { label: "Enabled", value: note.enabled, onValueChange: (v: boolean) => updateNote(note.id, { enabled: v }) }),
+              React.createElement(TextInput, { label: "Trigger Keyword", placeholder: "Leave empty for every message...", value: note.trigger, onChange: (v: string) => updateNote(note.id, { trigger: v }) }),
+              React.createElement(TextInput, { label: "Note Text", placeholder: "Enter text...", value: note.footer, onChange: (v: string) => updateNote(note.id, { footer: v }) }),
+              React.createElement(TableSwitchRow, { label: "Remove trigger from message", value: note.removeTrigger, onValueChange: (v: boolean) => updateNote(note.id, { removeTrigger: v }) }),
+              React.createElement(TableRow, { label: "Position", subLabel: `Currently at: ${(note.position || "bottom").toUpperCase()}`, onPress: () => updateNote(note.id, { position: (note.position || "bottom") === "top" ? "bottom" : "top" }) }),
+              React.createElement(TableRow, { label: "Style", subLabel: `Current: ${(note.style || "none").toUpperCase()}`, onPress: () => toggleSelectingStyle(note.id) }),
               selectingStyle === note.id && React.createElement(View, { style: { paddingLeft: 16, backgroundColor: "rgba(0,0,0,0.1)" } },
                   (["none", "subtext", "blockquote", "code"] as NoteStyle[]).map(s => 
                       React.createElement(TableRow, {
                           key: s,
                           label: s.toUpperCase(),
                           selected: note.style === s,
-                          onPress: () => {
-                              updateNote(note.id, { style: s });
-                              toggleSelectingStyle(note.id);
-                          }
+                          onPress: () => { updateNote(note.id, { style: s }); toggleSelectingStyle(note.id); }
                       })
                   )
               ),
@@ -367,10 +321,7 @@ export const settings = () => {
                   })
               )
             ),
-            React.createElement(TouchableOpacity, {
-                style: styles.deleteButton,
-                onPress: () => deleteNote(note.id),
-              },
+            React.createElement(TouchableOpacity, { style: styles.deleteButton, onPress: () => deleteNote(note.id) },
               React.createElement(Text, { style: styles.buttonText }, "Delete Profile")
             )
           )
@@ -380,14 +331,10 @@ export const settings = () => {
         React.createElement(Text, { style: styles.buttonText }, "+ Add New Profile")
       ),
       React.createElement(TableRowGroup, { title: "Info" },
-        React.createElement(TableRow, {
-          label: "Placeholders",
-          subLabel: "{trigger}, {time}, {date}",
-          disabled: true,
-        }),
+        React.createElement(TableRow, { label: "Placeholders", subLabel: "{trigger}, {time}, {date}", disabled: true }),
         React.createElement(TableRow, {
             label: "Script Context",
-            subLabel: "Variables: content (string), note (object), utils (send, delete, edit, runAfter). Return new content.",
+            subLabel: "content, note, utils (send, delete, edit, toast, copy, runAfter), storage (persistent). Return null to cancel send.",
             disabled: true,
         })
       )
