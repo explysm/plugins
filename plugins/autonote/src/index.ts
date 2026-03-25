@@ -177,11 +177,11 @@ function processPlaceholders(text: string, triggerMatch: string, content: string
 
 function isScoped(note: AutoNote, channelId: string): boolean {
     if (note.whitelist) {
-        const ids = note.whitelist.split(",").map(s => s.trim());
+        const ids = note.whitelist.split(",").map(s => s.trim()).filter(Boolean);
         if (ids.length > 0 && !ids.includes(channelId)) return false;
     }
     if (note.blacklist) {
-        const ids = note.blacklist.split(",").map(s => s.trim());
+        const ids = note.blacklist.split(",").map(s => s.trim()).filter(Boolean);
         if (ids.length > 0 && ids.includes(channelId)) return false;
     }
     return true;
@@ -227,14 +227,15 @@ function addAutoNote(content: string, notes: AutoNote[], utils: any, channelId: 
             } catch(e) { console.error("[AutoNote] Invalid regex:", e); return current; }
         } else {
             const escapedTrigger = note.trigger.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-            triggerRegex = new RegExp("^" + escapedTrigger + "\\b", "i");
+            // Support triggers that end in punctuation and allow optional leading whitespace
+            triggerRegex = new RegExp("^\\s*" + escapedTrigger + "(?![\\w])", "i");
             match = current.match(triggerRegex);
         }
 
         if (!match) return current;
 
         matchedSpecific = true;
-        const matchedText = match[0];
+        const matchedText = match[0].trim();
         let processedContent = current;
         if (note.removeTrigger) {
           processedContent = current.replace(triggerRegex, "").trim();
@@ -275,19 +276,21 @@ function addAutoNote(content: string, notes: AutoNote[], utils: any, channelId: 
 }
 
 // Default settings
-storage.notes ??= [
-  {
-    id: Math.random().toString(36).slice(2),
-    enabled: true,
-    trigger: "@silent",
-    footer: "This was sent as a {trigger} message to avoid annoyance",
-    removeTrigger: false,
-    style: "subtext",
-    position: "bottom",
-    data: {},
-    icon: "🥷"
-  },
-];
+if (!Array.isArray(storage.notes)) {
+  storage.notes = [
+    {
+      id: Math.random().toString(36).slice(2),
+      enabled: true,
+      trigger: "@silent",
+      footer: "This was sent as a {trigger} message to avoid annoyance",
+      removeTrigger: false,
+      style: "subtext",
+      position: "bottom",
+      data: {},
+      icon: "🥷"
+    },
+  ];
+}
 
 const patches = [];
 
@@ -345,7 +348,7 @@ export const onUnload = () => patches.forEach(p => p());
 
 export const settings = () => {
   const [notes, setNotes] = React.useState<AutoNote[]>(() => {
-      const currentNotes = [...(storage.notes || [])];
+      const currentNotes = Array.isArray(storage.notes) ? [...storage.notes] : [];
       let changed = false;
       currentNotes.forEach(n => {
           if (!n.style) { n.style = "none"; changed = true; }
@@ -358,7 +361,7 @@ export const settings = () => {
   
   const [collapsed, setCollapsed] = React.useState<Record<string, boolean>>(() => {
       const initial: Record<string, boolean> = {};
-      (storage.notes || []).forEach((n: any) => { initial[n.id] = true; });
+      (Array.isArray(notes) ? notes : []).forEach((n: any) => { initial[n.id] = true; });
       return initial;
   });
   const [selectingStyle, setSelectingStyle] = React.useState<string | null>(null);
