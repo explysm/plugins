@@ -97,17 +97,21 @@ function addAutoNote(content: string, notes: AutoNote[], utils: any): string | n
     if (!note.script) return currentContent;
     try {
       note.data ??= {};
+      // Pass content, note, utils, and a dedicated storage object for the script
       const scriptFn = new Function("content", "note", "utils", "storage", note.script);
       const result = scriptFn(currentContent, note, utils, note.data);
+      
       if (result === null) return null;
       return typeof result === "string" ? result : currentContent;
     } catch (e) {
-      console.error("[AutoNote] Script error:", e);
+      console.error("[AutoNote] Script error in profile " + (note.trigger || "default") + ":", e);
       return currentContent;
     }
   };
 
-  for (const note of notes) {
+  const safeNotes = Array.isArray(notes) ? notes : [];
+
+  for (const note of safeNotes) {
     if (!note.enabled || !note.trigger) continue;
     const escapedTrigger = note.trigger.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const triggerRegex = new RegExp("^" + escapedTrigger + "\\b", "i");
@@ -131,7 +135,7 @@ function addAutoNote(content: string, notes: AutoNote[], utils: any): string | n
   }
 
   if (!matchedSpecific) {
-    for (const note of notes) {
+    for (const note of safeNotes) {
       if (!note.enabled || note.trigger) continue;
       const scriptResult = runScript(note, newContent);
       if (scriptResult === null) return null;
@@ -163,47 +167,63 @@ storage.notes ??= [
 
 const patches = [];
 
-// Use INSTEAD to allow true cancellation by not calling orig
+// Use INSTEAD to allow true cancellation
 patches.push(instead("sendMessage", MessageActions, (args, orig) => {
     const channelId = args[0];
     const message = args[1];
     
-    if (message?.__autoNoteProcessed) return orig(...args);
-    
-    if (message?.content) {
-        const afterCallbacks: ((id: string) => void)[] = [];
-        const utils = {
-            send: (msg: string) => MessageActions.sendMessage(channelId, { content: msg, __autoNoteProcessed: true }),
-            delete: (messageId: string) => MessageActions.deleteMessage?.(channelId, messageId),
-            edit: (messageId: string, msg: string) => MessageActions.editMessage?.(channelId, messageId, { content: msg }),
-            sendClyde: (text: string) => MessageActions.sendClydeError?.(channelId, text),
-            copy: (text: string) => Clipboard?.setString?.(text),
-            runAfter: (cb: (id: string) => void) => afterCallbacks.push(cb)
-        };
-
-        const result = addAutoNote(message.content, storage.notes, utils);
-        
-        if (result === null) {
-            console.log("[AutoNote] Message send blocked by script.");
-            return Promise.resolve();
-        }
-
-        message.content = result;
-        const res = orig(...args);
-
-        if (afterCallbacks.length > 0 && res && typeof res.then === "function") {
-            res.then((msg: any) => {
-                const id = msg?.id || msg?.body?.id || msg?.message?.id;
-                if (id) {
-                    afterCallbacks.forEach((cb: any) => {
-                        try { cb(id); } catch(e) { console.error("[AutoNote] runAfter callback error:", e); }
-                    });
-                }
-            }).catch((e: any) => console.error("[AutoNote] sendMessage promise failed:", e));
-        }
-        return res;
+    // Safety check: ensure content is a string
+    if (typeof message?.content !== "string" || message?.__autoNoteProcessed) {
+        return orig(...args);
     }
-    return orig(...args);
+    
+    const afterCallbacks: ((id: string) => void)[] = [];
+    const utils = {
+        send: (msg: string) => MessageActions.sendMessage(channelId, { content: msg, __autoNoteProcessed: true }),
+        delete: (messageId: string) => MessageActions.deleteMessage?.(channelId, messageId),
+        edit: (messageId: string, msg: string) => MessageActions.editMessage?.(channelId, messageId, { content: msg }),
+        sendClyde: (text: string) => {
+            try {
+                return MessageActions.sendClydeError(channelId, text);
+            } catch(e) {
+                console.error("[AutoNote] sendClydeError failed:", e);
+            }
+        },
+        copy: (text: string) => Clipboard?.setString?.(text),
+        runAfter: (cb: (id: string) => void) => afterCallbacks.push(cb)
+    };
+
+    const result = addAutoNote(message.content, storage.notes, utils);
+    
+    if (result === null) {
+        console.log("[AutoNote] Message send blocked by script.");
+        // Return a dummy message object to prevent Discord from crashing when it tries to read the result
+        return Promise.resolve({
+            id: "0",
+            channel_id: channelId,
+            content: "",
+            author: { id: "0", username: "Clyde" },
+            attachments: [],
+            embeds: [],
+            mentions: [],
+            timestamp: new Date().toISOString()
+        });
+    }
+
+    message.content = result;
+    const res = orig(...args);
+
+    if (afterCallbacks.length > 0 && res && typeof res.then === "function") {
+        res.then((msg: any) => {
+            const id = msg?.id || msg?.body?.id || msg?.message?.id;
+            if (id) {
+                afterCallbacks.forEach((cb: any) => {
+                    try { cb(id); } catch(e) { console.error("[AutoNote] runAfter callback error:", e); }
+                });
+            }
+        }).catch((e: any) => console.error("[AutoNote] sendMessage promise failed:", e));
+    }
+    return res;
 }));
 
 export const onUnload = () => patches.forEach(p => p());
@@ -266,7 +286,7 @@ export const settings = () => {
             React.createElement(TableRowGroup, null,
               React.createElement(TableSwitchRow, { label: "Enabled", value: note.enabled, onValueChange: (v: boolean) => updateNote(note.id, { enabled: v }) }),
               React.createElement(TextInput, { label: "Trigger Keyword", placeholder: "Leave empty for every message...", value: note.trigger, onChange: (v: string) => updateNote(note.id, { trigger: v }) }),
-              React.createElement(TextInput, { label: "Note Text", placeholder: "Enter text...", value: note.footer, onChange: (v: string) => updateNote(note.id, { footer: v }) }),
+              React.createElement(TextInput, { label: "Note Text", placeholder: "Enter text...", value: note.footer, onChange: (v: string) => updateNote(note.id, { footer: v }), multiline: true }),
               React.createElement(TableSwitchRow, { label: "Remove trigger from message", value: note.removeTrigger, onValueChange: (v: boolean) => updateNote(note.id, { removeTrigger: v }) }),
               React.createElement(TableRow, { label: "Position", subLabel: `Currently at: ${(note.position || "bottom").toUpperCase()}`, onPress: () => updateNote(note.id, { position: (note.position || "bottom") === "top" ? "bottom" : "top" }) }),
               React.createElement(TableRow, { label: "Style", subLabel: `Current: ${(note.style || "none").toUpperCase()}`, onPress: () => toggleSelectingStyle(note.id) }),
@@ -286,7 +306,7 @@ export const settings = () => {
                   })
               )
             ),
-            React.createElement(TouchableOpacity, { style: styles.deleteButton, onPress: () => deleteNote(note.id) },
+            React.createElement(TouchableOpacity, { style: styles.deleteButton, onPress: () => h(e.id) },
               React.createElement(Text, { style: styles.buttonText }, "Delete Profile")
             )
           )
