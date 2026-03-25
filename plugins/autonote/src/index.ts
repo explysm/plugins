@@ -1,33 +1,21 @@
-import { defineCorePlugin } from "..";
-import { findByProps } from "@metro";
-import { after } from "@lib/api/patcher";
-import { logger } from "@lib/utils/logger";
-import { settings } from "@lib/api/settings";
-import { React } from "@metro/common";
+import { findByProps } from "@vendetta/metro";
+import { React, ReactNative } from "@vendetta/metro/common";
+import { after } from "@vendetta/patcher";
+import { storage } from "@vendetta/plugin";
 
-const { TableRowGroup, TableRow, TableSwitchRow, Stack } = findByProps(
-  "TableRowGroup",
-  "TableRow",
-  "TableSwitchRow",
-  "Stack",
-);
-const { ScrollView, Text } = require("react-native");
+const { ScrollView, Text } = ReactNative;
 
-type AutoNoteSettings = {
-  autoNote: boolean;
-};
+// Find message actions
+const MessageActions = findByProps("sendMessage", "receiveMessage");
 
-declare module "@lib/api/settings" {
-  interface Settings {
-    autonote?: AutoNoteSettings;
-  }
-}
+// UI Components
+const TableRowGroup = findByProps("TableRowGroup")?.TableRowGroup;
+const TableRow = findByProps("TableRow")?.TableRow;
+const TableSwitchRow = findByProps("TableSwitchRow")?.TableSwitchRow;
+const Stack = findByProps("Stack")?.Stack;
 
-const MessageActions = findByProps("sendMessage");
-let unpatch: (() => void) | null = null;
-
-function addAutoNote(content: string, config: AutoNoteSettings): string {
-  if (!config.autoNote) return content;
+function addAutoNote(content: string, autoNoteEnabled: boolean): string {
+  if (!autoNoteEnabled) return content;
   
   // Check if message starts with @silent
   const isSilent = /@silent\b/i.test(content);
@@ -39,111 +27,45 @@ function addAutoNote(content: string, config: AutoNoteSettings): string {
   return content;
 }
 
-export default defineCorePlugin({
-  manifest: {
-    id: "bunny.autonote",
-    version: "1.0.0",
-    type: "plugin",
-    spec: 3,
-    main: "",
-    display: {
-      name: "AutoNote",
-      description:
-        "Automatically adds a note to @silent messages explaining they were sent to avoid annoyance.",
-      authors: [{ name: "explysm" }],
-    },
-  },
+// Default settings
+storage.autoNote ??= true;
 
-  SettingsComponent() {
-    const { useState, useEffect } = React;
-    const [config, setConfig] = useState<AutoNoteSettings>({
-      autoNote: settings.autonote?.autoNote ?? true,
-    });
-
-    useEffect(() => {
-      settings.autonote = config;
-    }, [config]);
-
-    const updateConfig = (key: keyof AutoNoteSettings, value: boolean) => {
-      setConfig((prev) => ({ ...prev, [key]: value }));
-    };
-
-    // Prefer table-style rows (TableRowGroup / TableSwitchRow) and Stack layout similar to other core plugins.
-    const {
-      TableRowGroup: _TRG,
-      TableRow: _TR,
-      TableSwitchRow: _TSR,
-      Stack: _S,
-    } = findByProps("TableRowGroup", "TableRow", "TableSwitchRow", "Stack");
-
-    // Fallback if the table-style components are not available in the host environment
-    if (!_TRG || !_TSR || !_TR || !_S) {
-      return React.createElement(
-        ScrollView,
-        { style: { flex: 1, padding: 12 } },
-        React.createElement(
-          Text,
-          null,
-          "AutoNote UI unavailable (missing TableRow components).",
-        ),
-      );
-    }
-
-    // Use the resolved components
-    const TableRowGroup = _TRG;
-    const TableRow = _TR;
-    const TableSwitchRow = _TSR;
-    const Stack = _S;
-
-    return React.createElement(ScrollView, { style: { flex: 1 } }, [
-      React.createElement(
-        Stack,
-        { spacing: 8, style: { padding: 10 } },
-
-        React.createElement(
-          TableRowGroup,
-          { title: "Settings" },
-          React.createElement(TableSwitchRow, {
-            label: "Enable AutoNote",
-            value: config.autoNote,
-            onValueChange: (v: boolean) => updateConfig("autoNote", v),
-          }),
-          React.createElement(TableRow, {
-            label: "Description",
-            subLabel:
-              "Automatically adds a note to @silent messages explaining they were sent to avoid annoyance.",
-            disabled: true,
-          }),
-        ),
-      ),
-    ]);
-  },
-
-  start() {
-    logger.log("AutoNote: Starting plugin");
-    settings.autonote = settings.autonote || {
-      autoNote: true,
-    };
-
-    if (!unpatch) {
-      unpatch = after("sendMessage", MessageActions, (args) => {
-        const config = settings.autonote!;
-        if (args[1]?.content) {
-          args[1].content = addAutoNote(args[1].content, config);
-          args[1].nonce = args[1].nonce || Math.random().toString(36).slice(2);
-        }
-      });
-    }
-    logger.log("AutoNote: Patched outgoing messages");
-  },
-
-  stop() {
-    logger.log("AutoNote: Stopping plugin");
-    if (unpatch) {
-      unpatch();
-      unpatch = null;
-    }
-    logger.log("AutoNote: Unpatched outgoing messages");
-  },
+const unpatch = after("sendMessage", MessageActions, (args) => {
+  if (args[1]?.content) {
+    args[1].content = addAutoNote(args[1].content, storage.autoNote);
+    args[1].nonce = args[1].nonce || Math.random().toString(36).slice(2);
+  }
 });
 
+export const onUnload = () => unpatch();
+
+export const settings = () => {
+  const [autoNote, setAutoNote] = React.useState(storage.autoNote);
+
+  // Fallback if components are missing
+  if (!TableRowGroup || !TableSwitchRow || !TableRow || !Stack) {
+     return React.createElement(ScrollView, { style: { flex: 1, padding: 12 } },
+        React.createElement(Text, { style: { color: "white" } }, "AutoNote UI unavailable (missing TableRow components).")
+     );
+  }
+
+  return React.createElement(ScrollView, { style: { flex: 1 } },
+    React.createElement(Stack, { spacing: 8, style: { padding: 10 } },
+      React.createElement(TableRowGroup, { title: "Settings" },
+        React.createElement(TableSwitchRow, {
+          label: "Enable AutoNote",
+          value: autoNote,
+          onValueChange: (v: boolean) => {
+            storage.autoNote = v;
+            setAutoNote(v);
+          },
+        }),
+        React.createElement(TableRow, {
+          label: "Description",
+          subLabel: "Automatically adds a note to @silent messages explaining they were sent to avoid annoyance.",
+          disabled: true,
+        })
+      )
+    )
+  );
+};
