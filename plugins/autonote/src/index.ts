@@ -1,6 +1,6 @@
 import { findByProps } from "@vendetta/metro";
 import { React, ReactNative } from "@vendetta/metro/common";
-import { after } from "@vendetta/patcher";
+import { after, before } from "@vendetta/patcher";
 import { storage } from "@vendetta/plugin";
 
 const { ScrollView, Text, TouchableOpacity, StyleSheet, View } = ReactNative;
@@ -91,7 +91,7 @@ function processPlaceholders(text: string, triggerMatch: string): string {
     .replace(/{date}/g, now.toLocaleDateString());
 }
 
-function addAutoNote(content: string, notes: AutoNote[]): string {
+function addAutoNote(content: string, notes: AutoNote[], utils: any): string {
   let newContent = content;
   let matchedSpecific = false;
 
@@ -116,8 +116,8 @@ function addAutoNote(content: string, notes: AutoNote[]): string {
     // Execute script
     if (note.script) {
       try {
-        const scriptFn = new Function("content", "note", note.script);
-        const result = scriptFn(newContent, note);
+        const scriptFn = new Function("content", "note", "utils", note.script);
+        const result = scriptFn(newContent, note, utils);
         if (typeof result === "string") newContent = result;
       } catch (e) {
         console.error("[AutoNote] Script error:", e);
@@ -144,8 +144,8 @@ function addAutoNote(content: string, notes: AutoNote[]): string {
       // Execute script
       if (note.script) {
         try {
-          const scriptFn = new Function("content", "note", note.script);
-          const result = scriptFn(newContent, note);
+          const scriptFn = new Function("content", "note", "utils", note.script);
+          const result = scriptFn(newContent, note, utils);
           if (typeof result === "string") newContent = result;
         } catch (e) {
           console.error("[AutoNote] Script error:", e);
@@ -181,18 +181,50 @@ storage.notes ??= [
   },
 ];
 
-const unpatch = after("sendMessage", MessageActions, (args) => {
-  if (args[1]?.content) {
-    args[1].content = addAutoNote(args[1].content, storage.notes);
-    args[1].nonce = args[1].nonce || Math.random().toString(36).slice(2);
-  }
-});
+const patches = [];
 
-export const onUnload = () => unpatch();
+// Patch BEFORE to modify content and register callbacks
+patches.push(before("sendMessage", MessageActions, (args) => {
+    const channelId = args[0];
+    const message = args[1];
+    
+    if (message?.content) {
+        const afterCallbacks: ((id: string) => void)[] = [];
+        const utils = {
+            send: (msg: string) => MessageActions.sendMessage(channelId, { content: msg }),
+            delete: (messageId: string) => MessageActions.deleteMessage(channelId, messageId),
+            runAfter: (cb: (id: string) => void) => afterCallbacks.push(cb)
+        };
+
+        message.content = addAutoNote(message.content, storage.notes, utils);
+        
+        if (afterCallbacks.length > 0) {
+            // Store callbacks on args to retrieve in 'after' patch
+            (args as any).__autoNoteCallbacks = afterCallbacks;
+        }
+    }
+    return args;
+}));
+
+// Patch AFTER to execute runAfter callbacks with the message ID
+patches.push(after("sendMessage", MessageActions, (args, res) => {
+    const callbacks = (args as any).__autoNoteCallbacks;
+    if (callbacks && res && typeof res.then === "function") {
+        res.then((msg: any) => {
+            const id = msg?.id || msg?.body?.id;
+            if (id) {
+                callbacks.forEach((cb: any) => {
+                    try { cb(id); } catch(e) { console.error("[AutoNote] runAfter callback error:", e); }
+                });
+            }
+        }).catch((e: any) => console.error("[AutoNote] sendMessage promise failed:", e));
+    }
+}));
+
+export const onUnload = () => patches.forEach(p => p());
 
 export const settings = () => {
   const [notes, setNotes] = React.useState<AutoNote[]>(() => {
-      // Migration: Ensure all notes have required fields
       const currentNotes = [...(storage.notes || [])];
       let changed = false;
       currentNotes.forEach(n => {
@@ -204,9 +236,14 @@ export const settings = () => {
   });
   
   const [collapsed, setCollapsed] = React.useState<Record<string, boolean>>({});
+  const [selectingStyle, setSelectingStyle] = React.useState<string | null>(null);
 
   const toggleCollapsed = (id: string) => {
     setCollapsed(prev => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const toggleSelectingStyle = (id: string) => {
+    setSelectingStyle(prev => (prev === id ? null : id));
   };
 
   const updateNotes = (newNotes: AutoNote[]) => {
@@ -289,16 +326,25 @@ export const settings = () => {
               React.createElement(TableRow, {
                 label: "Style",
                 subLabel: `Current: ${(note.style || "none").toUpperCase()}`,
-                onPress: () => {
-                  const styles: NoteStyle[] = ["none", "subtext", "blockquote", "code"];
-                  const currentIndex = styles.indexOf(note.style || "none");
-                  updateNote(note.id, { style: styles[(currentIndex + 1) % styles.length] });
-                },
+                onPress: () => toggleSelectingStyle(note.id),
               }),
+              selectingStyle === note.id && React.createElement(View, { style: { paddingLeft: 16, backgroundColor: "rgba(0,0,0,0.1)" } },
+                  (["none", "subtext", "blockquote", "code"] as NoteStyle[]).map(s => 
+                      React.createElement(TableRow, {
+                          key: s,
+                          label: s.toUpperCase(),
+                          selected: note.style === s,
+                          onPress: () => {
+                              updateNote(note.id, { style: s });
+                              toggleSelectingStyle(note.id);
+                          }
+                      })
+                  )
+              ),
               React.createElement(View, { style: { padding: 16 } },
                   React.createElement(Text, { style: { color: "#bbb", marginBottom: 8, fontSize: 12 } }, "Custom Script (JS)"),
                   React.createElement(TextInput, {
-                    placeholder: "return content + '...';",
+                    placeholder: "utils.runAfter(id => utils.delete(id));",
                     multiline: true,
                     value: note.script || "",
                     onChange: (v: string) => updateNote(note.id, { script: v }),
@@ -326,7 +372,7 @@ export const settings = () => {
         }),
         React.createElement(TableRow, {
             label: "Script Context",
-            subLabel: "Variables: content (string), note (object). Return new content.",
+            subLabel: "Variables: content (string), note (object), utils (send, delete, runAfter). Return new content.",
             disabled: true,
         })
       )
