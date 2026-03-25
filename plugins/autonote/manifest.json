@@ -1,0 +1,14 @@
+{
+  "name": "AutoNote",
+  "description": "Plugin that adds a footer to @silent messages explaining that it was sent as a @silent message to avoid annoyance.",
+  "authors": [
+    {
+      "name": "explysm",
+      "id": "752899252866515025"
+    }
+  ],
+  "main": "src/index.ts",
+  "vendetta": {
+    "icon": "ic_emoji_24px"
+  }
+}
