@@ -1,14 +1,17 @@
 import { findByProps } from "@vendetta/metro";
 import { React, ReactNative } from "@vendetta/metro/common";
-import { after, before } from "@vendetta/patcher";
+import { after, before, instead } from "@vendetta/patcher";
 import { storage } from "@vendetta/plugin";
 
 const { ScrollView, Text, TouchableOpacity, StyleSheet, View } = ReactNative;
 
 // Find internal modules
 const MessageActions = findByProps("sendMessage", "receiveMessage");
-const Toasts = findByProps("showToast");
-const Clipboard = findByProps("setString", "getString");
+// Try multiple common toast locations
+const ToastModule = findByProps("showToast") || findByProps("openNativeToast") || findByProps("ToastStore");
+
+console.log("[AutoNote] MessageActions keys:", Object.keys(MessageActions || {}));
+console.log("[AutoNote] ToastModule keys:", Object.keys(ToastModule || {}));
 
 // UI Components
 const TableRowGroup = findByProps("TableRowGroup")?.TableRowGroup;
@@ -29,7 +32,7 @@ interface AutoNote {
   style: NoteStyle;
   position: NotePosition;
   script?: string;
-  data?: Record<string, any>; // Persistent data for scripts
+  data?: Record<string, any>;
 }
 
 const styles = StyleSheet.create({
@@ -75,14 +78,10 @@ const styles = StyleSheet.create({
 
 function applyStyle(text: string, style: NoteStyle): string {
   switch (style) {
-    case "subtext":
-      return "-# " + text;
-    case "blockquote":
-      return "> " + text;
-    case "code":
-      return "`" + text + "`";
-    default:
-      return text;
+    case "subtext": return "-# " + text;
+    case "blockquote": return "> " + text;
+    case "code": return "`" + text + "`";
+    default: return text;
   }
 }
 
@@ -98,17 +97,12 @@ function addAutoNote(content: string, notes: AutoNote[], utils: any): string | n
   let newContent = content;
   let matchedSpecific = false;
 
-  // Helper to run scripts
   const runScript = (note: AutoNote, currentContent: string) => {
     if (!note.script) return currentContent;
     try {
-      // Initialize persistent data if it doesn't exist
       note.data ??= {};
-      
       const scriptFn = new Function("content", "note", "utils", "storage", note.script);
       const result = scriptFn(currentContent, note, utils, note.data);
-      
-      // If script returns null, it signals cancellation
       if (result === null) return null;
       return typeof result === "string" ? result : currentContent;
     } catch (e) {
@@ -117,47 +111,38 @@ function addAutoNote(content: string, notes: AutoNote[], utils: any): string | n
     }
   };
 
-  // First pass: Process specific triggers
   for (const note of notes) {
     if (!note.enabled || !note.trigger) continue;
-
     const escapedTrigger = note.trigger.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const triggerRegex = new RegExp("^" + escapedTrigger + "\\b", "i");
-
     const match = newContent.match(triggerRegex);
     if (!match) continue;
 
     matchedSpecific = true;
     const matchedText = match[0];
-
     if (note.removeTrigger) {
       newContent = newContent.replace(triggerRegex, "").trim();
     }
 
-    // Execute script
     const scriptResult = runScript(note, newContent);
     if (scriptResult === null) return null;
     newContent = scriptResult;
 
     let addedText = processPlaceholders(note.footer || "", matchedText);
     addedText = applyStyle(addedText, note.style || "none");
-
     const position = note.position || "bottom";
     newContent = position === "top" ? addedText + "\n" + newContent : newContent + "\n" + addedText;
   }
 
-  // Second pass: Fallback triggers
   if (!matchedSpecific) {
     for (const note of notes) {
       if (!note.enabled || note.trigger) continue;
-
       const scriptResult = runScript(note, newContent);
       if (scriptResult === null) return null;
       newContent = scriptResult;
 
       let addedText = processPlaceholders(note.footer || "", "");
       addedText = applyStyle(addedText, note.style || "none");
-
       const position = note.position || "bottom";
       newContent = position === "top" ? addedText + "\n" + newContent : newContent + "\n" + addedText;
     }
@@ -182,11 +167,12 @@ storage.notes ??= [
 
 const patches = [];
 
-patches.push(before("sendMessage", MessageActions, (args) => {
+// Use INSTEAD to allow true cancellation by not calling orig
+patches.push(instead("sendMessage", MessageActions, (args, orig) => {
     const channelId = args[0];
     const message = args[1];
     
-    if (message?.__autoNoteProcessed) return args;
+    if (message?.__autoNoteProcessed) return orig(...args);
     
     if (message?.content) {
         const afterCallbacks: ((id: string) => void)[] = [];
@@ -194,40 +180,41 @@ patches.push(before("sendMessage", MessageActions, (args) => {
             send: (msg: string) => MessageActions.sendMessage(channelId, { content: msg, __autoNoteProcessed: true }),
             delete: (messageId: string) => MessageActions.deleteMessage?.(channelId, messageId),
             edit: (messageId: string, msg: string) => MessageActions.editMessage?.(channelId, messageId, { content: msg }),
-            toast: (text: string) => Toasts?.showToast?.(text),
+            toast: (text: string) => {
+                const show = ToastModule?.showToast || ToastModule?.openNativeToast || ToastModule?.show;
+                if (show) show(text);
+                else console.error("[AutoNote] Toast function not found");
+            },
             copy: (text: string) => Clipboard?.setString?.(text),
             runAfter: (cb: (id: string) => void) => afterCallbacks.push(cb)
         };
 
         const result = addAutoNote(message.content, storage.notes, utils);
         
-        // If result is null, cancel the message send
         if (result === null) {
-            console.log("[AutoNote] Message cancelled by script.");
-            return null; // Returning null in 'before' usually cancels the call
+            console.log("[AutoNote] Message send blocked by script.");
+            return Promise.resolve(); // Return a resolved promise to satisfy Discord's expected return type
         }
 
         message.content = result;
         
-        if (afterCallbacks.length > 0) {
-            (args as any).__autoNoteCallbacks = afterCallbacks;
-        }
-    }
-    return args;
-}));
+        // Execute the original sendMessage
+        const res = orig(...args);
 
-patches.push(after("sendMessage", MessageActions, (args, res) => {
-    const callbacks = (args as any).__autoNoteCallbacks;
-    if (callbacks && res && typeof res.then === "function") {
-        res.then((msg: any) => {
-            const id = msg?.id || msg?.body?.id || msg?.message?.id;
-            if (id) {
-                callbacks.forEach((cb: any) => {
-                    try { cb(id); } catch(e) { console.error("[AutoNote] runAfter callback error:", e); }
-                });
-            }
-        }).catch((e: any) => console.error("[AutoNote] sendMessage promise failed:", e));
+        // Handle callbacks
+        if (afterCallbacks.length > 0 && res && typeof res.then === "function") {
+            res.then((msg: any) => {
+                const id = msg?.id || msg?.body?.id || msg?.message?.id;
+                if (id) {
+                    afterCallbacks.forEach((cb: any) => {
+                        try { cb(id); } catch(e) { console.error("[AutoNote] runAfter callback error:", e); }
+                    });
+                }
+            }).catch((e: any) => console.error("[AutoNote] sendMessage promise failed:", e));
+        }
+        return res;
     }
+    return orig(...args);
 }));
 
 export const onUnload = () => patches.forEach(p => p());
@@ -259,13 +246,7 @@ export const settings = () => {
   const addNote = () => {
     const newNote: AutoNote = {
       id: Math.random().toString(36).slice(2),
-      enabled: true,
-      trigger: "",
-      footer: "",
-      removeTrigger: false,
-      style: "none",
-      position: "bottom",
-      data: {}
+      enabled: true, trigger: "", footer: "", removeTrigger: false, style: "none", position: "bottom", data: {}
     };
     updateNotes([...notes, newNote]);
   };
@@ -303,9 +284,7 @@ export const settings = () => {
               selectingStyle === note.id && React.createElement(View, { style: { paddingLeft: 16, backgroundColor: "rgba(0,0,0,0.1)" } },
                   (["none", "subtext", "blockquote", "code"] as NoteStyle[]).map(s => 
                       React.createElement(TableRow, {
-                          key: s,
-                          label: s.toUpperCase(),
-                          selected: note.style === s,
+                          key: s, label: s.toUpperCase(), selected: note.style === s,
                           onPress: () => { updateNote(note.id, { style: s }); toggleSelectingStyle(note.id); }
                       })
                   )
@@ -314,10 +293,7 @@ export const settings = () => {
                   React.createElement(Text, { style: { color: "#bbb", marginBottom: 8, fontSize: 12 } }, "Custom Script (JS)"),
                   React.createElement(TextInput, {
                     placeholder: "utils.runAfter(id => utils.delete(id));",
-                    multiline: true,
-                    value: note.script || "",
-                    onChange: (v: string) => updateNote(note.id, { script: v }),
-                    style: styles.scriptInput
+                    multiline: true, value: note.script || "", onChange: (v: string) => updateNote(note.id, { script: v }), style: styles.scriptInput
                   })
               )
             ),
@@ -334,7 +310,7 @@ export const settings = () => {
         React.createElement(TableRow, { label: "Placeholders", subLabel: "{trigger}, {time}, {date}", disabled: true }),
         React.createElement(TableRow, {
             label: "Script Context",
-            subLabel: "content, note, utils (send, delete, edit, toast, copy, runAfter), storage (persistent). Return null to cancel send.",
+            subLabel: "content, note, utils (send, delete, edit, toast, copy, runAfter), storage. Return null to cancel send.",
             disabled: true,
         })
       )
