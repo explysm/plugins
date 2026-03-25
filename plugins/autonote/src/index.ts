@@ -120,6 +120,7 @@ const styles = StyleSheet.create({
 });
 
 function applyStyle(text: string, style: NoteStyle): string {
+  if (typeof text !== "string") return "";
   switch (style) {
     case "subtext": return "-# " + text;
     case "blockquote": return "> " + text;
@@ -129,12 +130,13 @@ function applyStyle(text: string, style: NoteStyle): string {
 }
 
 function processPlaceholders(text: string, triggerMatch: string, content: string): Promise<string> {
+  if (typeof text !== "string") return Promise.resolve("");
   const now = new Date();
   let result = text
-    .replace(/{trigger}/g, triggerMatch)
+    .replace(/{trigger}/g, triggerMatch || "")
     .replace(/{time}/g, now.toLocaleTimeString())
     .replace(/{date}/g, now.toLocaleDateString())
-    .replace(/{wordCount}/g, content.split(/\s+/).filter(Boolean).length.toString());
+    .replace(/{wordCount}/g, String((content || "").split(/\s+/).filter(Boolean).length));
 
   // Handle {random:A,B,C}
   result = result.replace(/{random:([^}]+)}/g, (_, options) => {
@@ -145,9 +147,11 @@ function processPlaceholders(text: string, triggerMatch: string, content: string
   // Handle {clipboard}
   const handleClipboard = (resText: string): Promise<string> => {
       if (resText.includes("{clipboard}")) {
-          return Promise.resolve(Clipboard?.getString?.() || "").then(clip => {
-              return resText.replace(/{clipboard}/g, clip);
-          });
+          try {
+              return Promise.resolve(Clipboard?.getString?.() || "").then(clip => {
+                  return resText.replace(/{clipboard}/g, clip || "");
+              }).catch(() => resText.replace(/{clipboard}/g, ""));
+          } catch(e) { return Promise.resolve(resText.replace(/{clipboard}/g, "")); }
       }
       return Promise.resolve(resText);
   };
@@ -162,10 +166,10 @@ function processPlaceholders(text: string, triggerMatch: string, content: string
           p = p.then(current => {
               const url = match.slice(5, -1);
               return fetch(url).then(r => r.text()).then(textRes => {
-                  return current.replace(match, textRes.slice(0, 500));
+                  return current.replace(match, (textRes || "").slice(0, 500));
               }).catch(e => {
                   console.error("[AutoNote] API fetch failed:", e);
-                  return current;
+                  return current.replace(match, "");
               });
           });
       });
@@ -176,11 +180,12 @@ function processPlaceholders(text: string, triggerMatch: string, content: string
 }
 
 function isScoped(note: AutoNote, channelId: string): boolean {
-    if (note.whitelist) {
+    if (!note || typeof channelId !== "string") return true;
+    if (typeof note.whitelist === "string" && note.whitelist.trim()) {
         const ids = note.whitelist.split(",").map(s => s.trim()).filter(Boolean);
         if (ids.length > 0 && !ids.includes(channelId)) return false;
     }
-    if (note.blacklist) {
+    if (typeof note.blacklist === "string" && note.blacklist.trim()) {
         const ids = note.blacklist.split(",").map(s => s.trim()).filter(Boolean);
         if (ids.length > 0 && ids.includes(channelId)) return false;
     }
@@ -188,16 +193,16 @@ function isScoped(note: AutoNote, channelId: string): boolean {
 }
 
 function addAutoNote(content: string, notes: AutoNote[], utils: any, channelId: string): Promise<string | null> {
-  let newContent = content;
+  if (typeof content !== "string") return Promise.resolve(content);
   let matchedSpecific = false;
 
   const runScript = (note: AutoNote, currentContent: string) => {
     if (!note.script) return Promise.resolve(currentContent);
     try {
-      note.data ??= {};
+      const data = note.data || {};
       // Wrap script in a function that returns the result, possibly as a Promise
       const scriptFn = new Function("content", "note", "utils", "storage", note.script);
-      return Promise.resolve(scriptFn(currentContent, note, utils, note.data)).then(result => {
+      return Promise.resolve(scriptFn(currentContent, note, utils, data)).then(result => {
           if (result === null) return null;
           return typeof result === "string" ? result : currentContent;
       }).catch(e => {
@@ -210,27 +215,26 @@ function addAutoNote(content: string, notes: AutoNote[], utils: any, channelId: 
     }
   };
 
-  const safeNotes = Array.isArray(notes) ? notes : [];
-  let p = Promise.resolve(newContent as string | null);
+  const safeNotes = Array.isArray(notes) ? notes.filter(n => n && n.enabled) : [];
+  let p = Promise.resolve(content as string | null);
 
   for (const note of safeNotes) {
     p = p.then(current => {
-        if (current === null || !note.enabled || !note.trigger || !isScoped(note, channelId)) return current;
+        if (current === null || !note.trigger || !isScoped(note, channelId)) return current;
         
         let match: RegExpMatchArray | null = null;
         let triggerRegex: RegExp;
 
-        if (note.isRegex) {
-            try {
+        try {
+            if (note.isRegex) {
                 triggerRegex = new RegExp(note.trigger, "i");
                 match = current.match(triggerRegex);
-            } catch(e) { console.error("[AutoNote] Invalid regex:", e); return current; }
-        } else {
-            const escapedTrigger = note.trigger.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-            // Support triggers that end in punctuation and allow optional leading whitespace
-            triggerRegex = new RegExp("^\\s*" + escapedTrigger + "(?![\\w])", "i");
-            match = current.match(triggerRegex);
-        }
+            } else {
+                const escapedTrigger = note.trigger.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+                triggerRegex = new RegExp("^\\s*" + escapedTrigger + "(?![\\w])", "i");
+                match = current.match(triggerRegex);
+            }
+        } catch(e) { console.error("[AutoNote] Regex error:", e); return current; }
 
         if (!match) return current;
 
@@ -246,6 +250,7 @@ function addAutoNote(content: string, notes: AutoNote[], utils: any, channelId: 
             return processPlaceholders(note.footer || "", matchedText, scriptResult).then(addedText => {
                 const position = note.position || "bottom";
                 const styledText = applyStyle(addedText, note.style || "none");
+                if (!styledText) return scriptResult;
                 return position === "top" ? styledText + "\n" + scriptResult : scriptResult + "\n" + styledText;
             });
         });
@@ -257,13 +262,16 @@ function addAutoNote(content: string, notes: AutoNote[], utils: any, channelId: 
       
       let pFallback = Promise.resolve(current as string | null);
       for (const note of safeNotes) {
+        if (note.trigger) continue; // Skip if it has a trigger
+        
         pFallback = pFallback.then(curr => {
-            if (curr === null || !note.enabled || note.trigger || !isScoped(note, channelId)) return curr;
+            if (curr === null || !isScoped(note, channelId)) return curr;
             return runScript(note, curr).then(scriptResult => {
                 if (scriptResult === null) return null;
                 return processPlaceholders(note.footer || "", "", scriptResult).then(addedText => {
                     const position = note.position || "bottom";
                     const styledText = applyStyle(addedText, note.style || "none");
+                    if (!styledText) return scriptResult;
                     return position === "top" ? styledText + "\n" + scriptResult : scriptResult + "\n" + styledText;
                 });
             });
@@ -276,8 +284,7 @@ function addAutoNote(content: string, notes: AutoNote[], utils: any, channelId: 
 }
 
 // Default settings
-if (!Array.isArray(storage.notes)) {
-  storage.notes = [
+storage.notes ??= [
     {
       id: Math.random().toString(36).slice(2),
       enabled: true,
@@ -289,8 +296,7 @@ if (!Array.isArray(storage.notes)) {
       data: {},
       icon: "🥷"
     },
-  ];
-}
+];
 
 const patches = [];
 
@@ -341,6 +347,9 @@ patches.push(instead("sendMessage", MessageActions, (args, orig) => {
             }).catch((e: any) => console.error("[AutoNote] sendMessage promise failed:", e));
         }
         return res;
+    }).catch(e => {
+        console.error("[AutoNote] critical error in addAutoNote:", e);
+        return orig(...args);
     });
 }));
 
@@ -351,6 +360,11 @@ export const settings = () => {
       const currentNotes = Array.isArray(storage.notes) ? [...storage.notes] : [];
       let changed = false;
       currentNotes.forEach(n => {
+          if (n.enabled === undefined) { n.enabled = true; changed = true; }
+          if (typeof n.trigger !== "string") { n.trigger = n.trigger ? String(n.trigger) : ""; changed = true; }
+          if (typeof n.footer !== "string") { n.footer = n.footer ? String(n.footer) : ""; changed = true; }
+          if (typeof n.whitelist !== "string") { n.whitelist = n.whitelist ? String(n.whitelist) : ""; changed = true; }
+          if (typeof n.blacklist !== "string") { n.blacklist = n.blacklist ? String(n.blacklist) : ""; changed = true; }
           if (!n.style) { n.style = "none"; changed = true; }
           if (!n.position) { n.position = "bottom"; changed = true; }
           if (!n.data) { n.data = {}; changed = true; }
