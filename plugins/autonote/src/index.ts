@@ -57,7 +57,7 @@ return content.split("").map(c => Math.random() > 0.8 ? c.toUpperCase() : c.toLo
   "API Example": `// Fetch data from an API
 return utils.fetch("https://api.quotable.io/random")
     .then(r => r.json())
-    .then(data => content + "\n\n> " + data.content + " — " + data.author);`
+    .then(data => content + "\\n\\n> " + data.content + " — " + data.author);`
 };
 
 const styles = StyleSheet.create({
