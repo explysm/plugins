@@ -12,6 +12,10 @@ AutoNote allows running arbitrary JavaScript to manipulate message content and p
   - `edit(messageId, text)`: Edits a message in the current channel.
   - `copy(text)`: Copies text to the system clipboard.
   - `fetch(url, options)`: Standard `fetch` API for network requests. Returns a Promise.
+  - `log(...args)`: Logs messages to the developer console.
+  - `sleep(ms)`: A helper for pausing execution (e.g., `await utils.sleep(1000)`).
+  - `stop()`: A helper that returns `null` to cancel sending the message.
+  - `webhook(url, data)`: Sends a message to a Discord webhook (bypasses browser CORS blocks).
   - `runAfter(callback)`: Registers a function to run **after** the message is sent. Receives the `messageId`.
 
 ---
@@ -80,3 +84,48 @@ return utils.fetch("https://api.quotable.io/random")
         return content + `\n\n> ${quote.content} — ${quote.author}`;
     });
 ```
+
+### 7. Webhook Logger
+Forwards a copy of every message sent with this trigger to an external Discord webhook.
+**Script:**
+```javascript
+utils.webhook("WEBHOOK_URL", {
+    name: "AutoNote Log Bot",
+    content: `[#${utils.channel}] Message Sent: ${content}`
+});
+return content;
+```
+
+### 8. Multi-Bot Identity (Cancellation)
+Instead of sending a regular message, send a webhook as a different bot and cancel the original.
+**Script:**
+```javascript
+const bots = [
+    { name: "Support Bot", icon: "https://i.imgur.com/8fK0X9f.png" },
+    { name: "Emergency Bot", icon: "https://i.imgur.com/R67pXS0.png" }
+];
+const bot = bots[Math.floor(Math.random() * bots.length)];
+
+utils.webhook("WEBHOOK_URL", {
+    name: bot.name,
+    avatar: bot.icon,
+    content: content
+});
+return null; // Cancel the original message
+```
+
+### 9. Stats Reporter (Memory + Webhook)
+Uses persistent memory to track message counts and report to a webhook every 10 messages.
+**Script:**
+```javascript
+storage.count = (storage.count || 0) + 1;
+
+if (storage.count % 10 === 0) {
+    utils.webhook("WEBHOOK_URL", {
+        name: "Stats Reporter",
+        content: `User has sent ${storage.count} messages using this trigger.`
+    });
+}
+return content;
+```
+

@@ -11,6 +11,7 @@ const Clipboard = findByProps("setString", "getString");
 const ChannelStore = findByProps("getChannel", "getChannels");
 const GuildStore = findByProps("getGuild", "getGuilds");
 const UserStore = findByProps("getCurrentUser", "getUser");
+const HTTP = findByProps("get", "post", "put");
 
 // UI Components
 const TableRowGroup = findByProps("TableRowGroup")?.TableRowGroup;
@@ -61,12 +62,33 @@ return content.split("").map(c => Math.random() > 0.8 ? c.toUpperCase() : c.toLo
 return utils.fetch("https://api.quotable.io/random")
     .then(r => r.json())
     .then(data => content + "\\n\\n> " + data.content + " — " + data.author);`,
-  "Webhook Example": `// Send a message to a webhook
+  "Webhook: Logger": `// Logs every message you send to a webhook
 utils.webhook("WEBHOOK_URL", {
-    name: "AutoNote Bot",
-    avatar: "https://i.imgur.com/8fK0X9f.png",
-    content: "Sent from AutoNote: " + content
+    name: user.username + " Logger",
+    content: "Sent in #" + utils.channel + ": " + content
 });
+return content;`,
+  "Webhook: Multi-Bot": `// Randomizes the bot name/avatar for each message
+const bots = [
+    { name: "Guard", icon: "https://i.imgur.com/8fK0X9f.png" },
+    { name: "Medic", icon: "https://i.imgur.com/R67pXS0.png" }
+];
+const bot = bots[Math.floor(Math.random() * bots.length)];
+
+utils.webhook("WEBHOOK_URL", {
+    name: bot.name,
+    avatar: bot.icon,
+    content: content
+});
+return null; // Don't send original message`,
+  "Webhook: Stats": `// Tracks message count in memory and reports every 5th message
+storage.total = (storage.total || 0) + 1;
+if (storage.total % 5 === 0) {
+    utils.webhook("WEBHOOK_URL", {
+        name: "Stats Bot",
+        content: "User has sent " + storage.total + " messages so far!"
+    });
+}
 return content;`
 };
 
@@ -371,20 +393,33 @@ patches.push(instead("sendMessage", MessageActions, (args, orig) => {
         edit: (messageId: string, msg: string) => MessageActions.editMessage?.(channelId, messageId, { content: msg }),
         copy: (text: string) => Clipboard?.setString?.(text),
         fetch: (url: string, opts?: any) => fetch(url, opts),
+        log: (...args: any[]) => console.log("[AutoNote Script]", ...args),
         sleep: (ms: number) => new Promise(res => setTimeout(res, ms)),
         stop: () => null,
         webhook: (urlOrData: string | any, data?: any) => {
             const url = typeof urlOrData === "string" ? urlOrData : urlOrData?.url;
             const payload = typeof urlOrData === "string" ? data : urlOrData;
             if (!url) return Promise.reject("No webhook URL provided");
+            
+            const body = {
+                content: payload?.content,
+                username: payload?.name || payload?.username,
+                avatar_url: payload?.avatar || payload?.avatar_url
+            };
+
+            // Try using Discord's internal HTTP module first to bypass CORS/Browser blocks
+            if (HTTP?.post) {
+                return HTTP.post({
+                    url,
+                    body,
+                    headers: { "Content-Type": "application/json" }
+                });
+            }
+
             return fetch(url, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    content: payload?.content,
-                    username: payload?.name || payload?.username,
-                    avatar_url: payload?.avatar || payload?.avatar_url
-                })
+                body: JSON.stringify(body)
             });
         },
         runAfter: (cb: (id: string) => void) => afterCallbacks.push(cb)
@@ -564,7 +599,7 @@ export const settings = () => {
         React.createElement(TableRow, { label: "Placeholders", subLabel: "{trigger}, {time}, {date}, {wordCount}, {clipboard}, {random:A,B}, {api:url}, {channel}, {channelID}, {server}, {serverID}, {user}, {mention:ID}", disabled: true }),
         React.createElement(TableRow, {
             label: "Script Context",
-            subLabel: "content, note, storage, utils (send, delete, edit, copy, runAfter, fetch, webhook, sleep, stop). Return null to cancel.",
+            subLabel: "content, note, storage, utils (send, delete, edit, copy, runAfter, fetch, log, webhook, sleep, stop). Return null to cancel.",
             disabled: true,
         })
       )
