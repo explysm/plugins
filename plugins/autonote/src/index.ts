@@ -8,6 +8,9 @@ const { ScrollView, Text, TouchableOpacity, StyleSheet, View } = ReactNative;
 // Find internal modules
 const MessageActions = findByProps("sendMessage", "receiveMessage");
 const Clipboard = findByProps("setString", "getString");
+const ChannelStore = findByProps("getChannel", "getChannels");
+const GuildStore = findByProps("getGuild", "getGuilds");
+const UserStore = findByProps("getCurrentUser", "getUser");
 
 // UI Components
 const TableRowGroup = findByProps("TableRowGroup")?.TableRowGroup;
@@ -57,15 +60,24 @@ return content.split("").map(c => Math.random() > 0.8 ? c.toUpperCase() : c.toLo
   "API Example": `// Fetch data from an API
 return utils.fetch("https://api.quotable.io/random")
     .then(r => r.json())
-    .then(data => content + "\\n\\n> " + data.content + " — " + data.author);`
+    .then(data => content + "\\n\\n> " + data.content + " — " + data.author);`,
+  "Webhook Example": `// Send a message to a webhook
+utils.webhook("WEBHOOK_URL", {
+    name: "AutoNote Bot",
+    avatar: "https://i.imgur.com/8fK0X9f.png",
+    content: "Sent from AutoNote: " + content
+});
+return content;`
 };
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: "rgba(255, 255, 255, 0.05)",
-    borderRadius: 8,
-    padding: 12,
+    backgroundColor: "rgba(255, 255, 255, 0.04)", // Surface Container
+    borderRadius: 16,
+    padding: 16,
     marginBottom: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.08)",
   },
   headerRow: {
     flexDirection: "row",
@@ -74,48 +86,58 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   deleteButton: {
-    backgroundColor: "#ed4245",
-    padding: 8,
-    borderRadius: 4,
+    backgroundColor: "rgba(237, 66, 69, 0.15)", // Tonal Error
+    padding: 12,
+    borderRadius: 24,
     alignItems: "center",
-    marginTop: 12,
+    marginTop: 16,
+    borderWidth: 1,
+    borderColor: "rgba(237, 66, 69, 0.3)",
+  },
+  deleteButtonText: {
+    color: "#ff8f8f",
+    fontWeight: "600",
   },
   addButton: {
-    backgroundColor: "#5865f2",
-    padding: 12,
-    borderRadius: 8,
+    backgroundColor: "#5865f2", // Primary
+    padding: 16,
+    borderRadius: 16,
     alignItems: "center",
     marginBottom: 20,
+    elevation: 2,
   },
   secondaryButton: {
-    backgroundColor: "rgba(255, 255, 255, 0.1)",
-    padding: 8,
-    borderRadius: 4,
+    backgroundColor: "rgba(255, 255, 255, 0.08)", // Tonal
+    padding: 12,
+    borderRadius: 12,
     alignItems: "center",
     marginTop: 8,
   },
   buttonText: {
     color: "white",
-    fontWeight: "bold",
+    fontWeight: "600",
+    fontSize: 14,
   },
   scriptInput: {
      fontFamily: "monospace",
-     fontSize: 12,
-     backgroundColor: "rgba(0,0,0,0.2)",
-     borderRadius: 4,
-     padding: 8,
-     color: "#ccc",
+     fontSize: 13,
+     backgroundColor: "rgba(0,0,0,0.3)",
+     borderRadius: 12,
+     padding: 12,
+     color: "#e0e0e0",
+     marginTop: 8,
   },
   modalContent: {
     flex: 1,
-    backgroundColor: "#2c2f33",
-    padding: 20,
+    backgroundColor: "#1c1b1f", // M3 Dark Surface
+    padding: 24,
   },
   modalHeader: {
-    fontSize: 20,
-    fontWeight: "bold",
+    fontSize: 24,
+    fontWeight: "normal",
     color: "white",
-    marginBottom: 10,
+    marginBottom: 16,
+    letterSpacing: 0.5,
   }
 });
 
@@ -129,14 +151,25 @@ function applyStyle(text: string, style: NoteStyle): string {
   }
 }
 
-function processPlaceholders(text: string, triggerMatch: string, content: string): Promise<string> {
+function processPlaceholders(text: string, triggerMatch: string, content: string, channelId: string): Promise<string> {
   if (typeof text !== "string") return Promise.resolve("");
   const now = new Date();
+  
+  const channel = ChannelStore?.getChannel?.(channelId);
+  const guild = ChannelStore?.getGuild?.(channelId) || GuildStore?.getGuild?.(channel?.guild_id);
+  const user = UserStore?.getCurrentUser?.();
+
   let result = text
     .replace(/{trigger}/g, triggerMatch || "")
     .replace(/{time}/g, now.toLocaleTimeString())
     .replace(/{date}/g, now.toLocaleDateString())
-    .replace(/{wordCount}/g, String((content || "").split(/\s+/).filter(Boolean).length));
+    .replace(/{wordCount}/g, String((content || "").split(/\s+/).filter(Boolean).length))
+    .replace(/{channel}/g, channel?.name || "Unknown")
+    .replace(/{channelID}/g, channelId)
+    .replace(/{server}/g, guild?.name || "Direct Message")
+    .replace(/{serverID}/g, guild?.id || "0")
+    .replace(/{user}/g, user?.username || "Unknown")
+    .replace(/{mention:(\d+)}/g, (_, id) => `<@${id}>`);
 
   // Handle {random:A,B,C}
   result = result.replace(/{random:([^}]+)}/g, (_, options) => {
@@ -203,6 +236,7 @@ function addAutoNote(content: string, notes: AutoNote[], utils: any, channelId: 
       // Wrap script in a function that returns the result, possibly as a Promise
       const scriptFn = new Function("content", "note", "utils", "storage", note.script);
       return Promise.resolve(scriptFn(currentContent, note, utils, data)).then(result => {
+          note.data = data; // Ensure changes to "storage" are preserved
           if (result === null) return null;
           return typeof result === "string" ? result : currentContent;
       }).catch(e => {
@@ -215,7 +249,7 @@ function addAutoNote(content: string, notes: AutoNote[], utils: any, channelId: 
     }
   };
 
-  const safeNotes = Array.isArray(notes) ? notes.filter(n => n && n.enabled) : [];
+  const safeNotes = Array.isArray(notes) ? notes.filter(n => n && n.enabled !== false) : [];
   let p = Promise.resolve(content as string | null);
 
   for (const note of safeNotes) {
@@ -247,7 +281,7 @@ function addAutoNote(content: string, notes: AutoNote[], utils: any, channelId: 
 
         return runScript(note, processedContent).then(scriptResult => {
             if (scriptResult === null) return null;
-            return processPlaceholders(note.footer || "", matchedText, scriptResult).then(addedText => {
+            return processPlaceholders(note.footer || "", matchedText, scriptResult, channelId).then(addedText => {
                 const position = note.position || "bottom";
                 const styledText = applyStyle(addedText, note.style || "none");
                 if (!styledText) return scriptResult;
@@ -268,7 +302,7 @@ function addAutoNote(content: string, notes: AutoNote[], utils: any, channelId: 
             if (curr === null || !isScoped(note, channelId)) return curr;
             return runScript(note, curr).then(scriptResult => {
                 if (scriptResult === null) return null;
-                return processPlaceholders(note.footer || "", "", scriptResult).then(addedText => {
+                return processPlaceholders(note.footer || "", "", scriptResult, channelId).then(addedText => {
                     const position = note.position || "bottom";
                     const styledText = applyStyle(addedText, note.style || "none");
                     if (!styledText) return scriptResult;
@@ -283,20 +317,41 @@ function addAutoNote(content: string, notes: AutoNote[], utils: any, channelId: 
   return p;
 }
 
-// Default settings
-storage.notes ??= [
-    {
-      id: Math.random().toString(36).slice(2),
-      enabled: true,
-      trigger: "@silent",
-      footer: "This was sent as a {trigger} message to avoid annoyance",
-      removeTrigger: false,
-      style: "subtext",
-      position: "bottom",
-      data: {},
-      icon: "🥷"
-    },
-];
+// Migration / Validation
+function validateStorage() {
+    if (!Array.isArray(storage.notes)) {
+        storage.notes = [
+            {
+              id: Math.random().toString(36).slice(2),
+              enabled: true,
+              trigger: "@silent",
+              footer: "This was sent as a {trigger} message to avoid annoyance",
+              removeTrigger: false,
+              style: "subtext",
+              position: "bottom",
+              data: {},
+              icon: "🥷"
+            },
+        ];
+        return;
+    }
+
+    let changed = false;
+    storage.notes.forEach(n => {
+        if (!n) return;
+        if (n.enabled === undefined) { n.enabled = true; changed = true; }
+        if (typeof n.trigger !== "string") { n.trigger = n.trigger ? String(n.trigger) : ""; changed = true; }
+        if (typeof n.footer !== "string") { n.footer = n.footer ? String(n.footer) : ""; changed = true; }
+        if (typeof n.whitelist !== "string") { n.whitelist = n.whitelist ? String(n.whitelist) : ""; changed = true; }
+        if (typeof n.blacklist !== "string") { n.blacklist = n.blacklist ? String(n.blacklist) : ""; changed = true; }
+        if (!n.style) { n.style = "none"; changed = true; }
+        if (!n.position) { n.position = "bottom"; changed = true; }
+        if (!n.data) { n.data = {}; changed = true; }
+    });
+    if (changed) storage.notes = [...storage.notes];
+}
+
+validateStorage();
 
 const patches = [];
 
@@ -316,6 +371,22 @@ patches.push(instead("sendMessage", MessageActions, (args, orig) => {
         edit: (messageId: string, msg: string) => MessageActions.editMessage?.(channelId, messageId, { content: msg }),
         copy: (text: string) => Clipboard?.setString?.(text),
         fetch: (url: string, opts?: any) => fetch(url, opts),
+        sleep: (ms: number) => new Promise(res => setTimeout(res, ms)),
+        stop: () => null,
+        webhook: (urlOrData: string | any, data?: any) => {
+            const url = typeof urlOrData === "string" ? urlOrData : urlOrData?.url;
+            const payload = typeof urlOrData === "string" ? data : urlOrData;
+            if (!url) return Promise.reject("No webhook URL provided");
+            return fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    content: payload?.content,
+                    username: payload?.name || payload?.username,
+                    avatar_url: payload?.avatar || payload?.avatar_url
+                })
+            });
+        },
         runAfter: (cb: (id: string) => void) => afterCallbacks.push(cb)
     };
 
@@ -478,7 +549,7 @@ export const settings = () => {
               )
             ),
             React.createElement(TouchableOpacity, { style: styles.deleteButton, onPress: () => deleteNote(note.id) },
-              React.createElement(Text, { style: styles.buttonText }, "Delete Profile")
+              React.createElement(Text, { style: styles.deleteButtonText }, "Delete Profile")
             )
           )
         )
@@ -490,10 +561,10 @@ export const settings = () => {
         React.createElement(Text, { style: styles.buttonText }, "📥 Import Profile from Clipboard")
       ),
       React.createElement(TableRowGroup, { title: "Info" },
-        React.createElement(TableRow, { label: "Placeholders", subLabel: "{trigger}, {time}, {date}, {wordCount}, {clipboard}, {random:A,B}, {api:url}", disabled: true }),
+        React.createElement(TableRow, { label: "Placeholders", subLabel: "{trigger}, {time}, {date}, {wordCount}, {clipboard}, {random:A,B}, {api:url}, {channel}, {channelID}, {server}, {serverID}, {user}, {mention:ID}", disabled: true }),
         React.createElement(TableRow, {
             label: "Script Context",
-            subLabel: "content, note, storage, utils (send, delete, edit, copy, runAfter, fetch). Return null to cancel.",
+            subLabel: "content, note, storage, utils (send, delete, edit, copy, runAfter, fetch, webhook, sleep, stop). Return null to cancel.",
             disabled: true,
         })
       )
