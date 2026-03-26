@@ -64,7 +64,7 @@ return utils.fetch("https://api.quotable.io/random")
     .then(data => content + "\\n\\n> " + data.content + " — " + data.author);`,
   "Webhook: Logger": `// Logs every message you send to a webhook
 utils.webhook("WEBHOOK_URL", {
-    name: user.username + " Logger",
+    name: utils.user.username + " Logger",
     content: "Sent in #" + utils.channel + ": " + content
 });
 return content;`,
@@ -283,6 +283,7 @@ function addAutoNote(content: string, notes: AutoNote[], utils: any, channelId: 
 
         try {
             if (note.isRegex) {
+                if (!note.trigger) return current;
                 triggerRegex = new RegExp(note.trigger, "i");
                 match = current.match(triggerRegex);
             } else {
@@ -290,7 +291,14 @@ function addAutoNote(content: string, notes: AutoNote[], utils: any, channelId: 
                 triggerRegex = new RegExp("^\\s*" + escapedTrigger + "(?![\\w])", "i");
                 match = current.match(triggerRegex);
             }
-        } catch(e) { console.error("[AutoNote] Regex error:", e); return current; }
+        } catch(e) { 
+            if (note.isRegex) {
+                console.warn("[AutoNote] Invalid Regex in profile: " + note.trigger);
+            } else {
+                console.error("[AutoNote] Trigger matching error:", e); 
+            }
+            return current; 
+        }
 
         if (!match) return current;
 
@@ -386,8 +394,17 @@ patches.push(instead("sendMessage", MessageActions, (args, orig) => {
         return orig(...args);
     }
     
+    const channel = ChannelStore?.getChannel?.(channelId);
+    const guild = ChannelStore?.getGuild?.(channelId) || GuildStore?.getGuild?.(channel?.guild_id);
+    const user = UserStore?.getCurrentUser?.();
+
     const afterCallbacks: ((id: string) => void)[] = [];
     const utils = {
+        channel: channel?.name || "Unknown",
+        channelID: channelId,
+        server: guild?.name || "Direct Message",
+        serverID: guild?.id || "0",
+        user: user,
         send: (msg: string) => MessageActions.sendMessage(channelId, { content: msg, __autoNoteProcessed: true }),
         delete: (messageId: string) => MessageActions.deleteMessage?.(channelId, messageId),
         edit: (messageId: string, msg: string) => MessageActions.editMessage?.(channelId, messageId, { content: msg }),
