@@ -454,10 +454,33 @@ function addAutoNote(content: string, notes: AutoNote[], baseUtils: any, channel
 }
 
 function validateStorage() {
-    if (!Array.isArray(storage.notes)) {
-        storage.notes = [{ id: Math.random().toString(36).slice(2), enabled: true, trigger: "@silent", footer: "Sent as {trigger}", removeTrigger: false, style: "subtext", position: "bottom", data: {}, icon: "🥷" }];
+    try {
+        if (!Array.isArray(storage.notes)) {
+            storage.notes = [{ id: Math.random().toString(36).slice(2), enabled: true, trigger: "@silent", footer: "Sent as {trigger}", removeTrigger: false, style: "subtext", position: "bottom", data: {}, icon: "🥷" }];
+        } else {
+            // Ensure all notes have an ID and necessary fields
+            storage.notes = storage.notes.map(n => ({
+                id: n.id || Math.random().toString(36).slice(2),
+                enabled: n.enabled !== false,
+                trigger: n.trigger || "",
+                footer: n.footer || "",
+                removeTrigger: !!n.removeTrigger,
+                style: n.style || "none",
+                position: n.position || "bottom",
+                data: n.data || {},
+                icon: n.icon || "📝",
+                isRegex: !!n.isRegex,
+                script: n.script || "",
+                whitelist: n.whitelist || "",
+                blacklist: n.blacklist || ""
+            }));
+        }
+        if (!Array.isArray(storage._logs)) storage._logs = [];
+    } catch (e) {
+        console.error("[AutoNote] Storage validation failed:", e);
+        storage.notes = [];
+        storage._logs = [];
     }
-    if (!Array.isArray(storage._logs)) storage._logs = [];
 }
 
 validateStorage();
@@ -513,7 +536,7 @@ patches.push(instead("sendMessage", MessageActions, (args, orig) => {
         runAfter: (cb: (id: string) => void) => afterCallbacks.push(cb)
     };
 
-    return addAutoNote(message.content, storage.notes, utils, channelId).then(result => {
+    return addAutoNote(message.content, storage.notes || [], utils, channelId).then(result => {
         if (result === null) return { id: "0", channel_id: channelId, content: "", author: { id: "0", username: "Clyde" }, attachments: [], embeds: [], mentions: [], timestamp: new Date().toISOString() };
         message.content = result;
         const res = orig(...args);
@@ -524,17 +547,23 @@ patches.push(instead("sendMessage", MessageActions, (args, orig) => {
             });
         }
         return res;
-    }).catch(e => orig(...args));
+    }).catch(e => {
+        console.error("[AutoNote] Error in sendMessage patch:", e);
+        return orig(...args);
+    });
 }));
 
 export const onUnload = () => patches.forEach(p => p());
 
 export const settings = () => {
-  const [notes, setNotes] = React.useState<AutoNote[]>(() => storage.notes);
+  const [notes, setNotes] = React.useState<AutoNote[]>(() => {
+      validateStorage();
+      return [...(storage.notes || [])];
+  });
   const [search, setSearch] = React.useState("");
   const [collapsed, setCollapsed] = React.useState<Record<string, boolean>>(() => {
       const initial: Record<string, boolean> = {};
-      notes.forEach(n => { initial[n.id] = true; });
+      (notes || []).forEach(n => { initial[n.id] = true; });
       return initial;
   });
   const [selectingStyle, setSelectingStyle] = React.useState<string | null>(null);
@@ -543,7 +572,13 @@ export const settings = () => {
   const [showEmojiPicker, setShowEmojiPicker] = React.useState<string | null>(null);
   const [logs, setLogs] = React.useState<string[]>(() => storage._logs || []);
 
-  const updateNotes = (newNotes: AutoNote[]) => { storage.notes = newNotes; setNotes([...newNotes]); };
+  const updateNotes = (newNotes: AutoNote[]) => { 
+      // Deep clone to avoid proxy issues and clean data
+      const cleaned = JSON.parse(JSON.stringify(newNotes));
+      storage.notes = cleaned; 
+      setNotes(cleaned); 
+  };
+
   const toggleCollapsed = (id: string) => { LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut); setCollapsed(prev => ({ ...prev, [id]: !prev[id] })); };
 
   const reorder = (index: number, direction: number) => {
@@ -607,6 +642,7 @@ export const settings = () => {
               React.createElement(TableRow, { label: "Icon Emoji", subLabel: note.icon || "📝", onPress: () => setShowEmojiPicker(note.id) }),
               React.createElement(TextInput, { label: "Trigger Keyword", placeholder: "Global Fallback...", value: note.trigger, onChange: (v: string) => updateNote(note.id, { trigger: v }) }),
               React.createElement(TableSwitchRow, { label: "Use Regex", value: note.isRegex || false, onValueChange: (v: boolean) => updateNote(note.id, { isRegex: v }) }),
+              React.createElement(TableSwitchRow, { label: "Remove Trigger from Message", value: note.removeTrigger || false, onValueChange: (v: boolean) => updateNote(note.id, { removeTrigger: v }) }),
               React.createElement(TextInput, { label: "Note Text", placeholder: "Enter text...", value: note.footer, onChange: (v: string) => updateNote(note.id, { footer: v }), multiline: true }),
               React.createElement(TableRow, { label: "Position", subLabel: (note.position || "bottom").toUpperCase(), onPress: () => updateNote(note.id, { position: (note.position || "bottom") === "top" ? "bottom" : "top" }) }),
               React.createElement(TableRow, { label: "Style", subLabel: (note.style || "none").toUpperCase(), onPress: () => { LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut); setSelectingStyle(selectingStyle === note.id ? null : note.id); } }),
@@ -615,6 +651,8 @@ export const settings = () => {
                       React.createElement(TableRow, { key: s, label: s.toUpperCase(), selected: note.style === s, onPress: () => { updateNote(note.id, { style: s }); setSelectingStyle(null); } })
                   )
               ),
+              React.createElement(TextInput, { label: "Whitelist (Channel IDs)", placeholder: "Comma-separated IDs...", value: note.whitelist || "", onChange: (v: string) => updateNote(note.id, { whitelist: v }) }),
+              React.createElement(TextInput, { label: "Blacklist (Channel IDs)", placeholder: "Comma-separated IDs...", value: note.blacklist || "", onChange: (v: string) => updateNote(note.id, { blacklist: v }) }),
               React.createElement(View, { style: { padding: 16 } },
                   React.createElement(Text, { style: { color: "#bbb", marginBottom: 8, fontSize: 12 } }, "Custom Script (JS)"),
                   React.createElement(CodeEditor, {
