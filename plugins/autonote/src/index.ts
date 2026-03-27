@@ -3,7 +3,7 @@ import { React, ReactNative } from "@vendetta/metro/common";
 import { after, before, instead } from "@vendetta/patcher";
 import { storage } from "@vendetta/plugin";
 
-const { ScrollView, Text, TouchableOpacity, StyleSheet, View } = ReactNative;
+const { ScrollView, Text, TouchableOpacity, StyleSheet, View, LayoutAnimation, TextInput: RNTextInput } = ReactNative;
 
 // Find internal modules
 const MessageActions = findByProps("sendMessage", "receiveMessage");
@@ -92,14 +92,26 @@ if (storage.total % 5 === 0) {
 return content;`
 };
 
+const SNIPPETS = [
+    { label: "utils.send()", code: 'utils.send("Hello World");' },
+    { label: "utils.fetch()", code: 'utils.fetch("URL").then(r => r.json())' },
+    { label: "utils.delete()", code: 'utils.delete(id);' },
+    { label: "utils.copy()", code: 'utils.copy(content);' },
+    { label: "utils.sleep()", code: 'await utils.sleep(1000);' },
+    { label: "utils.webhook()", code: 'utils.webhook("URL", { content: "msg" });' },
+    { label: "Conditional", code: 'if (content.includes("test")) {\n  return "Match!";\n}' }
+];
+
+const COMMON_EMOJIS = ["📝", "🥷", "🤖", "📢", "💬", "✨", "🔥", "🌈", "🛡️", "🚀", "⚠️", "✅", "❌", "📦", "🔗", "💰", "🎮", "🎵", "📷", "💡"];
+
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: "rgba(255, 255, 255, 0.04)", // Surface Container
+    backgroundColor: "#2b2d31", // M3-like Surface
     borderRadius: 16,
     padding: 16,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.08)",
+    borderColor: "rgba(255, 255, 255, 0.05)",
   },
   headerRow: {
     flexDirection: "row",
@@ -108,28 +120,28 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   deleteButton: {
-    backgroundColor: "rgba(237, 66, 69, 0.15)", // Tonal Error
+    backgroundColor: "rgba(237, 66, 69, 0.1)", 
     padding: 12,
-    borderRadius: 24,
+    borderRadius: 12,
     alignItems: "center",
     marginTop: 16,
     borderWidth: 1,
-    borderColor: "rgba(237, 66, 69, 0.3)",
+    borderColor: "rgba(237, 66, 69, 0.2)",
   },
   deleteButtonText: {
     color: "#ff8f8f",
     fontWeight: "600",
   },
   addButton: {
-    backgroundColor: "#5865f2", // Primary
+    backgroundColor: "#5865f2", 
     padding: 16,
     borderRadius: 16,
     alignItems: "center",
-    marginBottom: 20,
+    marginBottom: 12,
     elevation: 2,
   },
   secondaryButton: {
-    backgroundColor: "rgba(255, 255, 255, 0.08)", // Tonal
+    backgroundColor: "rgba(255, 255, 255, 0.06)", 
     padding: 12,
     borderRadius: 12,
     alignItems: "center",
@@ -143,7 +155,7 @@ const styles = StyleSheet.create({
   scriptInput: {
      fontFamily: "monospace",
      fontSize: 13,
-     backgroundColor: "rgba(0,0,0,0.3)",
+     backgroundColor: "rgba(0,0,0,0.25)",
      borderRadius: 12,
      padding: 12,
      color: "#e0e0e0",
@@ -151,15 +163,38 @@ const styles = StyleSheet.create({
   },
   modalContent: {
     flex: 1,
-    backgroundColor: "#1c1b1f", // M3 Dark Surface
-    padding: 24,
+    backgroundColor: "#1e1f22", 
+    padding: 20,
   },
   modalHeader: {
-    fontSize: 24,
-    fontWeight: "normal",
+    fontSize: 22,
+    fontWeight: "600",
     color: "white",
     marginBottom: 16,
-    letterSpacing: 0.5,
+  },
+  snippetScroll: {
+      flexDirection: "row",
+      marginBottom: 12,
+  },
+  snippetTag: {
+      backgroundColor: "#313338",
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      borderRadius: 20,
+      marginRight: 8,
+      borderWidth: 1,
+      borderColor: "rgba(255,255,255,0.1)",
+  },
+  logItem: {
+      padding: 8,
+      borderBottomWidth: 1,
+      borderBottomColor: "rgba(255,255,255,0.05)",
+  },
+  reorderBtn: {
+      padding: 8,
+      backgroundColor: "rgba(255,255,255,0.05)",
+      borderRadius: 8,
+      marginLeft: 8,
   }
 });
 
@@ -247,6 +282,12 @@ function isScoped(note: AutoNote, channelId: string): boolean {
     return true;
 }
 
+function pushLog(msg: string) {
+    if (!storage._logs) storage._logs = [];
+    storage._logs.unshift(`[${new Date().toLocaleTimeString()}] ${msg}`);
+    if (storage._logs.length > 50) storage._logs.pop();
+}
+
 function addAutoNote(content: string, notes: AutoNote[], utils: any, channelId: string): Promise<string | null> {
   if (typeof content !== "string") return Promise.resolve(content);
   let matchedSpecific = false;
@@ -255,18 +296,18 @@ function addAutoNote(content: string, notes: AutoNote[], utils: any, channelId: 
     if (!note.script) return Promise.resolve(currentContent);
     try {
       const data = note.data || {};
-      // Wrap script in a function that returns the result, possibly as a Promise
       const scriptFn = new Function("content", "note", "utils", "storage", note.script);
       return Promise.resolve(scriptFn(currentContent, note, utils, data)).then(result => {
-          note.data = data; // Ensure changes to "storage" are preserved
+          note.data = data;
           if (result === null) return null;
           return typeof result === "string" ? result : currentContent;
       }).catch(e => {
-          console.error("[AutoNote] Script error in profile " + (note.trigger || "default") + ":", e);
+          pushLog(`Error in ${note.trigger || "Global"}: ${e.message}`);
+          console.error("[AutoNote] Script error:", e);
           return currentContent;
       });
     } catch (e) {
-      console.error("[AutoNote] Script error in profile " + (note.trigger || "default") + ":", e);
+      pushLog(`Compile error in ${note.trigger || "Global"}: ${e.message}`);
       return Promise.resolve(currentContent);
     }
   };
@@ -291,14 +332,7 @@ function addAutoNote(content: string, notes: AutoNote[], utils: any, channelId: 
                 triggerRegex = new RegExp("^\\s*" + escapedTrigger + "(?![\\w])", "i");
                 match = current.match(triggerRegex);
             }
-        } catch(e) { 
-            if (note.isRegex) {
-                console.warn("[AutoNote] Invalid Regex in profile: " + note.trigger);
-            } else {
-                console.error("[AutoNote] Trigger matching error:", e); 
-            }
-            return current; 
-        }
+        } catch(e) { return current; }
 
         if (!match) return current;
 
@@ -323,11 +357,9 @@ function addAutoNote(content: string, notes: AutoNote[], utils: any, channelId: 
 
   p = p.then(current => {
       if (current === null || matchedSpecific) return current;
-      
       let pFallback = Promise.resolve(current as string | null);
       for (const note of safeNotes) {
-        if (note.trigger) continue; // Skip if it has a trigger
-        
+        if (note.trigger) continue;
         pFallback = pFallback.then(curr => {
             if (curr === null || !isScoped(note, channelId)) return curr;
             return runScript(note, curr).then(scriptResult => {
@@ -347,52 +379,21 @@ function addAutoNote(content: string, notes: AutoNote[], utils: any, channelId: 
   return p;
 }
 
-// Migration / Validation
 function validateStorage() {
     if (!Array.isArray(storage.notes)) {
-        storage.notes = [
-            {
-              id: Math.random().toString(36).slice(2),
-              enabled: true,
-              trigger: "@silent",
-              footer: "This was sent as a {trigger} message to avoid annoyance",
-              removeTrigger: false,
-              style: "subtext",
-              position: "bottom",
-              data: {},
-              icon: "🥷"
-            },
-        ];
-        return;
+        storage.notes = [{ id: Math.random().toString(36).slice(2), enabled: true, trigger: "@silent", footer: "Sent as {trigger}", removeTrigger: false, style: "subtext", position: "bottom", data: {}, icon: "🥷" }];
     }
-
-    let changed = false;
-    storage.notes.forEach(n => {
-        if (!n) return;
-        if (n.enabled === undefined) { n.enabled = true; changed = true; }
-        if (typeof n.trigger !== "string") { n.trigger = n.trigger ? String(n.trigger) : ""; changed = true; }
-        if (typeof n.footer !== "string") { n.footer = n.footer ? String(n.footer) : ""; changed = true; }
-        if (typeof n.whitelist !== "string") { n.whitelist = n.whitelist ? String(n.whitelist) : ""; changed = true; }
-        if (typeof n.blacklist !== "string") { n.blacklist = n.blacklist ? String(n.blacklist) : ""; changed = true; }
-        if (!n.style) { n.style = "none"; changed = true; }
-        if (!n.position) { n.position = "bottom"; changed = true; }
-        if (!n.data) { n.data = {}; changed = true; }
-    });
-    if (changed) storage.notes = [...storage.notes];
+    if (!Array.isArray(storage._logs)) storage._logs = [];
 }
 
 validateStorage();
 
 const patches = [];
 
-// Use INSTEAD to allow true cancellation
 patches.push(instead("sendMessage", MessageActions, (args, orig) => {
     const channelId = args[0];
     const message = args[1];
-    
-    if (typeof message?.content !== "string" || message?.__autoNoteProcessed) {
-        return orig(...args);
-    }
+    if (typeof message?.content !== "string" || message?.__autoNoteProcessed) return orig(...args);
     
     const channel = ChannelStore?.getChannel?.(channelId);
     const guild = ChannelStore?.getGuild?.(channelId) || GuildStore?.getGuild?.(channel?.guild_id);
@@ -410,264 +411,179 @@ patches.push(instead("sendMessage", MessageActions, (args, orig) => {
         edit: (messageId: string, msg: string) => MessageActions.editMessage?.(channelId, messageId, { content: msg }),
         copy: (text: string) => Clipboard?.setString?.(text),
         fetch: (url: string, opts?: any) => fetch(url, opts),
-        log: (...args: any[]) => console.log("[AutoNote Script]", ...args),
+        log: (...args: any[]) => pushLog(args.map(a => typeof a === "object" ? JSON.stringify(a) : String(a)).join(" ")),
         sleep: (ms: number) => new Promise(res => setTimeout(res, ms)),
         stop: () => null,
         webhook: (urlOrData: string | any, data?: any) => {
             const url = typeof urlOrData === "string" ? urlOrData : urlOrData?.url;
             const payload = typeof urlOrData === "string" ? data : urlOrData;
             if (!url) return Promise.reject("No webhook URL provided");
-            
-            const body = {
-                content: payload?.content,
-                username: payload?.name || payload?.username,
-                avatar_url: payload?.avatar || payload?.avatar_url
-            };
-
-            // Try using Discord's internal HTTP module first to bypass CORS/Browser blocks
-            if (HTTP?.post) {
-                return HTTP.post({
-                    url,
-                    body,
-                    headers: { "Content-Type": "application/json" }
-                });
-            }
-
-            return fetch(url, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(body)
-            });
+            const body = { content: payload?.content, username: payload?.name || payload?.username, avatar_url: payload?.avatar || payload?.avatar_url };
+            if (HTTP?.post) return HTTP.post({ url, body, headers: { "Content-Type": "application/json" } });
+            return fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
         },
         runAfter: (cb: (id: string) => void) => afterCallbacks.push(cb)
     };
 
     return addAutoNote(message.content, storage.notes, utils, channelId).then(result => {
-        if (result === null) {
-            return {
-                id: "0",
-                channel_id: channelId,
-                content: "",
-                author: { id: "0", username: "Clyde" },
-                attachments: [],
-                embeds: [],
-                mentions: [],
-                timestamp: new Date().toISOString()
-            };
-        }
-
+        if (result === null) return { id: "0", channel_id: channelId, content: "", author: { id: "0", username: "Clyde" }, attachments: [], embeds: [], mentions: [], timestamp: new Date().toISOString() };
         message.content = result;
         const res = orig(...args);
-
-        if (afterCallbacks.length > 0 && res && typeof res.then === "function") {
+        if (afterCallbacks.length > 0 && res?.then) {
             res.then((msg: any) => {
                 const id = msg?.id || msg?.body?.id || msg?.message?.id;
-                if (id) {
-                    afterCallbacks.forEach((cb: any) => {
-                        try { cb(id); } catch(e) { console.error("[AutoNote] runAfter callback error:", e); }
-                    });
-                }
-            }).catch((e: any) => console.error("[AutoNote] sendMessage promise failed:", e));
+                if (id) afterCallbacks.forEach(cb => { try { cb(id); } catch(e) {} });
+            });
         }
         return res;
-    }).catch(e => {
-        console.error("[AutoNote] critical error in addAutoNote:", e);
-        return orig(...args);
-    });
+    }).catch(e => orig(...args));
 }));
 
 export const onUnload = () => patches.forEach(p => p());
 
 export const settings = () => {
-  const [notes, setNotes] = React.useState<AutoNote[]>(() => {
-      const currentNotes = Array.isArray(storage.notes) ? [...storage.notes] : [];
-      let changed = false;
-      currentNotes.forEach(n => {
-          if (n.enabled === undefined) { n.enabled = true; changed = true; }
-          if (typeof n.trigger !== "string") { n.trigger = n.trigger ? String(n.trigger) : ""; changed = true; }
-          if (typeof n.footer !== "string") { n.footer = n.footer ? String(n.footer) : ""; changed = true; }
-          if (typeof n.whitelist !== "string") { n.whitelist = n.whitelist ? String(n.whitelist) : ""; changed = true; }
-          if (typeof n.blacklist !== "string") { n.blacklist = n.blacklist ? String(n.blacklist) : ""; changed = true; }
-          if (!n.style) { n.style = "none"; changed = true; }
-          if (!n.position) { n.position = "bottom"; changed = true; }
-          if (!n.data) { n.data = {}; changed = true; }
-      });
-      if (changed) storage.notes = currentNotes;
-      return currentNotes;
-  });
-  
+  const [notes, setNotes] = React.useState<AutoNote[]>(() => storage.notes);
   const [collapsed, setCollapsed] = React.useState<Record<string, boolean>>(() => {
       const initial: Record<string, boolean> = {};
-      (Array.isArray(notes) ? notes : []).forEach((n: any) => { initial[n.id] = true; });
+      notes.forEach(n => { initial[n.id] = true; });
       return initial;
   });
   const [selectingStyle, setSelectingStyle] = React.useState<string | null>(null);
   const [modalScript, setModalScript] = React.useState<{id: string, code: string} | null>(null);
-  const [showTemplates, setShowTemplates] = React.useState<string | null>(null); // profile id
+  const [showTemplates, setShowTemplates] = React.useState<string | null>(null);
+  const [showEmojiPicker, setShowEmojiPicker] = React.useState<string | null>(null);
+  const [logs, setLogs] = React.useState<string[]>(() => storage._logs || []);
 
-  const toggleCollapsed = (id: string) => setCollapsed(prev => ({ ...prev, [id]: !prev[id] }));
-  const toggleSelectingStyle = (id: string) => setSelectingStyle(prev => (prev === id ? null : id));
   const updateNotes = (newNotes: AutoNote[]) => { storage.notes = newNotes; setNotes([...newNotes]); };
+  const toggleCollapsed = (id: string) => { LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut); setCollapsed(prev => ({ ...prev, [id]: !prev[id] })); };
+
+  const reorder = (index: number, direction: number) => {
+      const newNotes = [...notes];
+      const target = index + direction;
+      if (target < 0 || target >= newNotes.length) return;
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      [newNotes[index], newNotes[target]] = [newNotes[target], newNotes[index]];
+      updateNotes(newNotes);
+  };
 
   const addNote = (profile?: Partial<AutoNote>) => {
-    const newNote: AutoNote = {
-      id: Math.random().toString(36).slice(2),
-      enabled: true, trigger: "", footer: "", removeTrigger: false, style: "none", position: "bottom", data: {}, icon: "📝",
-      ...profile
-    };
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    const newNote: AutoNote = { id: Math.random().toString(36).slice(2), enabled: true, trigger: "", footer: "", removeTrigger: false, style: "none", position: "bottom", data: {}, icon: "📝", ...profile };
     updateNotes([...notes, newNote]);
   };
-
-  const deleteNote = (id: string) => updateNotes(notes.filter((n) => n.id !== id));
-  const updateNote = (id: string, partial: Partial<AutoNote>) => updateNotes(notes.map((n) => (n.id === id ? { ...n, ...partial } : n)));
-
-  const exportProfile = (note: AutoNote) => {
-      try {
-          // UTF-8 safe base64
-          const json = JSON.stringify(note);
-          const data = btoa(encodeURIComponent(json).replace(/%([0-9A-F]{2})/g, (match, p1) => String.fromCharCode(parseInt(p1, 16))));
-          Clipboard?.setString?.(data);
-      } catch(e) { console.error("[AutoNote] Export failed:", e); }
-  };
-
-  const importProfile = () => {
-      Promise.resolve(Clipboard?.getString?.() || "").then(data => {
-          if (!data) return;
-          try {
-              const json = decodeURIComponent(atob(data).split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join(''));
-              const profile = JSON.parse(json);
-              delete profile.id; // Generate new ID
-              addNote(profile);
-          } catch(e) { console.error("[AutoNote] Import failed:", e); }
-      });
-  };
-
-  if (!TableRowGroup || !TableSwitchRow || !TableRow || !Stack || !TextInput) {
-    return React.createElement(ScrollView, { style: { flex: 1, padding: 12 } },
-      React.createElement(Text, { style: { color: "white" } }, "AutoNote UI unavailable.")
-    );
-  }
+  const deleteNote = (id: string) => { LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut); updateNotes(notes.filter(n => n.id !== id)); };
+  const updateNote = (id: string, partial: Partial<AutoNote>) => updateNotes(notes.map(n => (n.id === id ? { ...n, ...partial } : n)));
 
   return React.createElement(ScrollView, { style: { flex: 1 } },
     React.createElement(Stack, { spacing: 8, style: { padding: 10 } },
-      notes.map((note) =>
+      notes.map((note, idx) =>
         React.createElement(View, { key: note.id, style: styles.card },
-          React.createElement(TouchableOpacity, { onPress: () => toggleCollapsed(note.id), style: styles.headerRow },
-            React.createElement(Text, { style: { color: "white", fontWeight: "bold", fontSize: 16 } }, 
-              `${collapsed[note.id] ? "▶" : "▼"} ${note.icon || "📝"} ${note.trigger ? (note.isRegex ? "/" + note.trigger + "/" : "Trigger: " + note.trigger) : "Global Fallback"}`
+          React.createElement(View, { style: styles.headerRow },
+            React.createElement(TouchableOpacity, { onPress: () => toggleCollapsed(note.id), style: { flex: 1, flexDirection: "row", alignItems: "center" } },
+                React.createElement(Text, { style: { color: "white", fontWeight: "bold", fontSize: 16 } }, 
+                  `${collapsed[note.id] ? "▶" : "▼"} ${note.icon || "📝"} ${note.trigger ? (note.isRegex ? "/" + note.trigger + "/" : "Trigger: " + note.trigger) : "Global Fallback"}`
+                )
             ),
-            React.createElement(Text, { style: { color: note.enabled ? "#43b581" : "#f04747", fontSize: 12 } }, 
-                note.enabled ? "ACTIVE" : "DISABLED"
+            React.createElement(View, { style: { flexDirection: "row" } },
+                React.createElement(TouchableOpacity, { style: styles.reorderBtn, onPress: () => reorder(idx, -1) }, React.createElement(Text, { style: { color: "white" } }, "▲")),
+                React.createElement(TouchableOpacity, { style: styles.reorderBtn, onPress: () => reorder(idx, 1) }, React.createElement(Text, { style: { color: "white" } }, "▼"))
             )
           ),
           
-          !collapsed[note.id] && React.createElement(View, { style: { marginTop: 10 } },
+          !collapsed[note.id] && React.createElement(View, { style: { marginTop: 12 } },
             React.createElement(TableRowGroup, null,
               React.createElement(TableSwitchRow, { label: "Enabled", value: note.enabled, onValueChange: (v: boolean) => updateNote(note.id, { enabled: v }) }),
-              React.createElement(TextInput, { label: "Icon Emoji", value: note.icon || "📝", onChange: (v: string) => updateNote(note.id, { icon: v }) }),
-              React.createElement(TextInput, { label: "Trigger Keyword", placeholder: "Leave empty for every message...", value: note.trigger, onChange: (v: string) => updateNote(note.id, { trigger: v }) }),
-              React.createElement(TableSwitchRow, { label: "Use Regular Expression", value: note.isRegex || false, onValueChange: (v: boolean) => updateNote(note.id, { isRegex: v }) }),
-              React.createElement(TextInput, { label: "Whitelist IDs", placeholder: "Comma-separated channel IDs...", value: note.whitelist || "", onChange: (v: string) => updateNote(note.id, { whitelist: v }) }),
-              React.createElement(TextInput, { label: "Blacklist IDs", placeholder: "Comma-separated channel IDs...", value: note.blacklist || "", onChange: (v: string) => updateNote(note.id, { blacklist: v }) }),
+              React.createElement(TableRow, { label: "Icon Emoji", subLabel: note.icon || "📝", onPress: () => setShowEmojiPicker(note.id) }),
+              React.createElement(TextInput, { label: "Trigger Keyword", placeholder: "Global Fallback...", value: note.trigger, onChange: (v: string) => updateNote(note.id, { trigger: v }) }),
+              React.createElement(TableSwitchRow, { label: "Use Regex", value: note.isRegex || false, onValueChange: (v: boolean) => updateNote(note.id, { isRegex: v }) }),
               React.createElement(TextInput, { label: "Note Text", placeholder: "Enter text...", value: note.footer, onChange: (v: string) => updateNote(note.id, { footer: v }), multiline: true }),
-              React.createElement(TableSwitchRow, { label: "Remove trigger from message", value: note.removeTrigger, onValueChange: (v: boolean) => updateNote(note.id, { removeTrigger: v }) }),
-              React.createElement(TableRow, { label: "Position", subLabel: `Currently at: ${(note.position || "bottom").toUpperCase()}`, onPress: () => updateNote(note.id, { position: (note.position || "bottom") === "top" ? "bottom" : "top" }) }),
-              React.createElement(TableRow, { label: "Style", subLabel: `Current: ${(note.style || "none").toUpperCase()}`, onPress: () => toggleSelectingStyle(note.id) }),
+              React.createElement(TableRow, { label: "Position", subLabel: (note.position || "bottom").toUpperCase(), onPress: () => updateNote(note.id, { position: (note.position || "bottom") === "top" ? "bottom" : "top" }) }),
+              React.createElement(TableRow, { label: "Style", subLabel: (note.style || "none").toUpperCase(), onPress: () => { LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut); setSelectingStyle(selectingStyle === note.id ? null : note.id); } }),
               selectingStyle === note.id && React.createElement(View, { style: { paddingLeft: 16, backgroundColor: "rgba(0,0,0,0.1)" } },
                   (["none", "subtext", "blockquote", "code"] as NoteStyle[]).map(s => 
-                      React.createElement(TableRow, {
-                          key: s, label: s.toUpperCase(), selected: note.style === s,
-                          onPress: () => { updateNote(note.id, { style: s }); toggleSelectingStyle(note.id); }
-                      })
+                      React.createElement(TableRow, { key: s, label: s.toUpperCase(), selected: note.style === s, onPress: () => { updateNote(note.id, { style: s }); setSelectingStyle(null); } })
                   )
               ),
               React.createElement(View, { style: { padding: 16 } },
                   React.createElement(Text, { style: { color: "#bbb", marginBottom: 8, fontSize: 12 } }, "Custom Script (JS)"),
-                  React.createElement(TextInput, {
+                  React.createElement(RNTextInput, {
                     placeholder: "utils.runAfter(id => utils.delete(id));",
-                    multiline: true, value: note.script || "", onChange: (v: string) => updateNote(note.id, { script: v }), style: styles.scriptInput
+                    multiline: true, value: note.script || "", onChangeText: (v: string) => updateNote(note.id, { script: v }), style: [styles.scriptInput, { maxHeight: 100 }]
                   }),
                   React.createElement(View, { style: { flexDirection: "row", gap: 8 } },
-                      React.createElement(TouchableOpacity, { style: [styles.secondaryButton, { flex: 1 }], onPress: () => setModalScript({ id: note.id, code: note.script || "" }) },
-                          React.createElement(Text, { style: styles.buttonText }, "🖥️ Big Editor")
-                      ),
-                      React.createElement(TouchableOpacity, { style: [styles.secondaryButton, { flex: 1 }], onPress: () => setShowTemplates(note.id) },
-                          React.createElement(Text, { style: styles.buttonText }, "📚 Templates")
-                      )
+                      React.createElement(TouchableOpacity, { style: [styles.secondaryButton, { flex: 1 }], onPress: () => setModalScript({ id: note.id, code: note.script || "" }) }, React.createElement(Text, { style: styles.buttonText }, "🖥️ Editor")),
+                      React.createElement(TouchableOpacity, { style: [styles.secondaryButton, { flex: 1 }], onPress: () => setShowTemplates(note.id) }, React.createElement(Text, { style: styles.buttonText }, "📚 Templates"))
                   ),
-                  React.createElement(TouchableOpacity, { style: styles.secondaryButton, onPress: () => exportProfile(note) },
-                      React.createElement(Text, { style: styles.buttonText }, "📤 Export Profile (Copy String)")
-                  )
+                  React.createElement(TouchableOpacity, { style: styles.secondaryButton, onPress: () => { Clipboard.setString(JSON.stringify(note)); pushLog("Profile copied!"); } }, React.createElement(Text, { style: styles.buttonText }, "📤 Export Profile"))
               )
             ),
-            React.createElement(TouchableOpacity, { style: styles.deleteButton, onPress: () => deleteNote(note.id) },
-              React.createElement(Text, { style: styles.deleteButtonText }, "Delete Profile")
-            )
+            React.createElement(TouchableOpacity, { style: styles.deleteButton, onPress: () => deleteNote(note.id) }, React.createElement(Text, { style: styles.deleteButtonText }, "Delete Profile"))
           )
         )
       ),
-      React.createElement(TouchableOpacity, { style: styles.addButton, onPress: () => addNote() },
-        React.createElement(Text, { style: styles.buttonText }, "+ Add New Profile")
-      ),
-      React.createElement(TouchableOpacity, { style: [styles.addButton, { backgroundColor: "#4e5058" }], onPress: importProfile },
-        React.createElement(Text, { style: styles.buttonText }, "📥 Import Profile from Clipboard")
-      ),
-      React.createElement(TableRowGroup, { title: "Info" },
-        React.createElement(TableRow, { label: "Placeholders", subLabel: "{trigger}, {time}, {date}, {wordCount}, {clipboard}, {random:A,B}, {api:url}, {channel}, {channelID}, {server}, {serverID}, {user}, {mention:ID}", disabled: true }),
-        React.createElement(TableRow, {
-            label: "Script Context",
-            subLabel: "content, note, storage, utils (send, delete, edit, copy, runAfter, fetch, log, webhook, sleep, stop). Return null to cancel.",
-            disabled: true,
-        })
+      React.createElement(TouchableOpacity, { style: styles.addButton, onPress: () => addNote() }, React.createElement(Text, { style: styles.buttonText }, "+ Add Profile")),
+      React.createElement(TouchableOpacity, { style: [styles.addButton, { backgroundColor: "#4e5058" }], onPress: () => {
+          Promise.resolve(Clipboard.getString()).then(data => { try { const p = JSON.parse(data); delete p.id; addNote(p); } catch(e) {} });
+      } }, React.createElement(Text, { style: styles.buttonText }, "📥 Import Profile")),
+
+      React.createElement(TableRowGroup, { title: "Script Logs" },
+          React.createElement(View, { style: { padding: 10, backgroundColor: "rgba(0,0,0,0.2)", borderRadius: 12 } },
+              logs.length === 0 ? React.createElement(Text, { style: { color: "#666", textAlign: "center" } }, "No logs yet.") :
+              logs.map((log, i) => React.createElement(View, { key: i, style: styles.logItem }, React.createElement(Text, { style: { color: "#ccc", fontSize: 12, fontFamily: "monospace" } }, log))),
+              React.createElement(TouchableOpacity, { style: [styles.secondaryButton, { marginTop: 10 }], onPress: () => { storage._logs = []; setLogs([]); } }, React.createElement(Text, { style: styles.buttonText }, "Clear Logs"))
+          )
       )
     ),
 
     modalScript && React.createElement(ReactNative.Modal, { visible: true, animationType: "slide" },
         React.createElement(View, { style: styles.modalContent },
-            React.createElement(Text, { style: styles.modalHeader }, "Big Script Editor"),
-            React.createElement(TextInput, {
-                style: [styles.scriptInput, { flex: 1, textAlignVertical: "top" }],
-                multiline: true,
-                value: modalScript.code,
-                onChange: (v: string) => setModalScript({ ...modalScript, code: v })
-            }),
-            React.createElement(TouchableOpacity, { 
-                style: [styles.addButton, { marginTop: 16 }], 
-                onPress: () => {
-                    updateNote(modalScript.id, { script: modalScript.code });
-                    setModalScript(null);
-                } 
-            },
-                React.createElement(Text, { style: styles.buttonText }, "SAVE & CLOSE")
+            React.createElement(Text, { style: styles.modalHeader }, "Script Editor"),
+            React.createElement(ScrollView, { horizontal: true, style: styles.snippetScroll, showsHorizontalScrollIndicator: false },
+                SNIPPETS.map(s => React.createElement(TouchableOpacity, { key: s.label, style: styles.snippetTag, onPress: () => setModalScript({ ...modalScript, code: modalScript.code + "\n" + s.code }) },
+                    React.createElement(Text, { style: { color: "#eee", fontSize: 12 } }, s.label)
+                ))
+            ),
+            React.createElement(View, { style: { flex: 1, backgroundColor: "rgba(0,0,0,0.3)", borderRadius: 16, overflow: "hidden" } },
+                React.createElement(RNTextInput, {
+                    style: [styles.scriptInput, { flex: 1, textAlignVertical: "top", marginTop: 0 }],
+                    multiline: true,
+                    value: modalScript.code,
+                    onChangeText: (v: string) => setModalScript({ ...modalScript, code: v })
+                })
+            ),
+            React.createElement(View, { style: { flexDirection: "row", gap: 12, marginTop: 16 } },
+                React.createElement(TouchableOpacity, { style: [styles.addButton, { flex: 1, marginBottom: 0, backgroundColor: "#23a55a" }], onPress: () => { updateNote(modalScript.id, { script: modalScript.code }); setModalScript(null); } }, React.createElement(Text, { style: styles.buttonText }, "SAVE")),
+                React.createElement(TouchableOpacity, { style: [styles.addButton, { flex: 1, marginBottom: 0, backgroundColor: "#f04747" }], onPress: () => setModalScript(null) }, React.createElement(Text, { style: styles.buttonText }, "CANCEL"))
+            )
+        )
+    ),
+
+    showEmojiPicker && React.createElement(ReactNative.Modal, { visible: true, transparent: true, animationType: "fade" },
+        React.createElement(TouchableOpacity, { style: { flex: 1, backgroundColor: "rgba(0,0,0,0.7)", justifyContent: "center", alignItems: "center" }, onPress: () => setShowEmojiPicker(null) },
+            React.createElement(View, { style: { backgroundColor: "#2b2d31", padding: 20, borderRadius: 24, width: "80%" } },
+                React.createElement(Text, { style: [styles.modalHeader, { textAlign: "center" }] }, "Pick an Icon"),
+                React.createElement(View, { style: { flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: 12 } },
+                    COMMON_EMOJIS.map(e => React.createElement(TouchableOpacity, { key: e, style: { padding: 10, backgroundColor: "rgba(255,255,255,0.05)", borderRadius: 12 }, onPress: () => { updateNote(showEmojiPicker, { icon: e }); setShowEmojiPicker(null); } },
+                        React.createElement(Text, { style: { fontSize: 24 } }, e)
+                    ))
+                )
             )
         )
     ),
 
     showTemplates && React.createElement(ReactNative.Modal, { visible: true, animationType: "fade", transparent: true },
         React.createElement(View, { style: { flex: 1, backgroundColor: "rgba(0,0,0,0.8)", justifyContent: "center", padding: 20 } },
-            React.createElement(View, { style: { backgroundColor: "#2c2f33", borderRadius: 8, padding: 16, maxHeight: "80%" } },
+            React.createElement(View, { style: { backgroundColor: "#2b2d31", borderRadius: 16, padding: 16, maxHeight: "80%" } },
                 React.createElement(Text, { style: [styles.modalHeader, { marginBottom: 16 }] }, "Select Template"),
                 React.createElement(ScrollView, null,
                     Object.keys(TEMPLATES).map(name => 
-                        React.createElement(TouchableOpacity, { 
-                            key: name, 
-                            style: [styles.secondaryButton, { padding: 12, marginBottom: 8, alignItems: "flex-start" }],
-                            onPress: () => {
-                                updateNote(showTemplates, { script: TEMPLATES[name] });
-                                setShowTemplates(null);
-                            }
-                        },
+                        React.createElement(TouchableOpacity, { key: name, style: [styles.secondaryButton, { padding: 12, marginBottom: 8, alignItems: "flex-start" }], onPress: () => { updateNote(showTemplates, { script: TEMPLATES[name] }); setShowTemplates(null); } },
                             React.createElement(Text, { style: [styles.buttonText, { fontSize: 16 }] }, name),
                             React.createElement(Text, { style: { color: "#aaa", fontSize: 12, marginTop: 4 } }, TEMPLATES[name].split("\n")[0].replace("// ", ""))
                         )
                     )
                 ),
-                React.createElement(TouchableOpacity, { 
-                    style: [styles.addButton, { marginTop: 16, marginBottom: 0 }], 
-                    onPress: () => setShowTemplates(null) 
-                },
-                    React.createElement(Text, { style: styles.buttonText }, "CANCEL")
-                )
+                React.createElement(TouchableOpacity, { style: [styles.addButton, { marginTop: 16, marginBottom: 0 }], onPress: () => setShowTemplates(null) }, React.createElement(Text, { style: styles.buttonText }, "CANCEL"))
             )
         )
     )
