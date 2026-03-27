@@ -99,12 +99,12 @@ return content;`
 const SNIPPETS = [
     { label: "send", code: 'utils.send("");' },
     { label: "fetch", code: 'utils.fetch("").then(r => r.json())' },
-    { label: "delete", code: 'utils.delete(id);' },
+    { label: "del", code: 'utils.delete(id);' },
     { label: "copy", code: 'utils.copy(content);' },
-    { label: "sleep", code: 'await utils.sleep(1000);' },
-    { label: "webhook", code: 'utils.webhook("", { content: "" });' },
+    { label: "wait", code: 'await utils.sleep(1000);' },
+    { label: "hook", code: 'utils.webhook("", { content: "" });' },
     { label: "log", code: 'utils.log("");' },
-    { label: "runAfter", code: 'utils.runAfter(id => {\n  \n});' },
+    { label: "after", code: 'utils.runAfter(id => {\n  \n});' },
     { label: "if", code: 'if (content.includes("")) {\n  \n}' }
 ];
 
@@ -127,7 +127,12 @@ const highlightJS = (code: string) => {
     let lastIndex = 0;
 
     while ((match = regex.exec(code)) !== null) {
-        const [full, comment, string, keyword, builtin, number, operator, word] = match;
+        // Add skipped text (whitespace, etc.)
+        if (match.index > lastIndex) {
+            tokens.push(React.createElement(Text, { key: `gap-${lastIndex}`, style: { color: syntaxColors.text } }, code.substring(lastIndex, match.index)));
+        }
+
+        const [full, comment, string, keyword, builtin, number, operator] = match;
         
         let color = syntaxColors.text;
         if (comment) color = syntaxColors.comment;
@@ -152,13 +157,13 @@ const CodeEditor = ({ value, onChange, style }: { value: string, onChange: (v: s
     const handleTextChange = (text: string) => {
         // Basic Auto-Indent
         if (text.length > value.length && text.endsWith("\n")) {
-            const lines = value.split("\n");
-            const lastLine = lines[lines.length - 1];
+            const lines = text.split("\n");
+            const lastLine = lines[lines.length - 2]; // Line before the new one
             const indentMatch = lastLine.match(/^(\s*)/);
             if (indentMatch) {
-                const indent = indentMatch[1];
-                const extraIndent = lastLine.trim().endsWith("{") ? "  " : "";
-                onChange(text + indent + extraIndent);
+                let indent = indentMatch[1];
+                if (lastLine.trim().endsWith("{")) indent += "  ";
+                onChange(text + indent);
                 return;
             }
         }
@@ -271,10 +276,10 @@ const styles = StyleSheet.create({
   },
   snippetTag: {
       backgroundColor: "#313338",
-      paddingHorizontal: 10,
-      paddingVertical: 6,
-      borderRadius: 20,
-      marginRight: 8,
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      borderRadius: 12,
+      marginRight: 6,
       borderWidth: 1,
       borderColor: "rgba(255,255,255,0.1)",
   },
@@ -637,7 +642,7 @@ export const settings = () => {
             React.createElement(Text, { style: styles.modalHeader }, "Script Editor"),
             React.createElement(ScrollView, { horizontal: true, style: styles.snippetScroll, showsHorizontalScrollIndicator: false },
                 SNIPPETS.map(s => React.createElement(TouchableOpacity, { key: s.label, style: styles.snippetTag, onPress: () => setModalScript({ ...modalScript, code: modalScript.code + "\n" + s.code }) },
-                    React.createElement(Text, { style: { color: "#eee", fontSize: 12 } }, s.label)
+                    React.createElement(Text, { style: { color: "#eee", fontSize: 11 } }, s.label)
                 ))
             ),
             React.createElement(View, { style: { flex: 1, backgroundColor: "rgba(0,0,0,0.3)", borderRadius: 16, overflow: "hidden" } },
