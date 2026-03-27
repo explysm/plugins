@@ -3,7 +3,7 @@ import { React, ReactNative } from "@vendetta/metro/common";
 import { after, before, instead } from "@vendetta/patcher";
 import { storage } from "@vendetta/plugin";
 
-const { ScrollView, Text, TouchableOpacity, StyleSheet, View, LayoutAnimation, TextInput: RNTextInput } = ReactNative;
+const { ScrollView, Text, TouchableOpacity, StyleSheet, View, LayoutAnimation, TextInput: RNTextInput, Platform } = ReactNative;
 
 // Find internal modules
 const MessageActions = findByProps("sendMessage", "receiveMessage");
@@ -116,18 +116,19 @@ const syntaxColors = {
     comment: "#6272a4",
     function: "#50fa7b",
     number: "#bd93f9",
+    operator: "#ffb86c",
     text: "#f8f8f2"
 };
 
 const highlightJS = (code: string) => {
     if (!code) return [];
     const tokens = [];
-    const regex = /(\/\/.*)|(".*?"|'.*?'|`.*?`)|(\b(const|let|var|if|else|for|while|return|function|async|await|new|try|catch|null|undefined|true|false)\b)|(\b(utils|storage|console|Math|JSON|Promise)\b)|(\d+)|([^\s\w]+)|(\w+)/g;
+    // 1: Comments, 2: Strings, 3: Keywords, 4: Builtins, 5: Numbers, 6: Operators, 7: Words
+    const regex = /(\/\*[\s\S]*?\*\/|\/\/.*)|("(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|`(?:\\[\s\S]|[^`\\])*`)|(\b(?:const|let|var|if|else|for|while|return|function|async|await|new|try|catch|null|undefined|true|false|class|extends|constructor|super|this|import|export|from|default|switch|case|break|continue|throw|try|catch|finally|delete|typeof|instanceof|void|in|of|debugger)\b)|(\b(?:utils|storage|console|Math|JSON|Promise|Object|Array|String|Number|Boolean|RegExp|Error|Map|Set|fetch|setTimeout|setInterval|clearTimeout|clearInterval)\b)|(\b0x[0-9a-fA-F]+\b|\b\d+(?:\.\d+)?(?:e[+-]?\d+)?\b)|([^\s\w]+)|(\w+)/g;
     let match;
     let lastIndex = 0;
 
     while ((match = regex.exec(code)) !== null) {
-        // Add skipped text (whitespace, etc.)
         if (match.index > lastIndex) {
             tokens.push(React.createElement(Text, { key: `gap-${lastIndex}`, style: { color: syntaxColors.text } }, code.substring(lastIndex, match.index)));
         }
@@ -140,7 +141,7 @@ const highlightJS = (code: string) => {
         else if (keyword) color = syntaxColors.keyword;
         else if (builtin) color = syntaxColors.function;
         else if (number) color = syntaxColors.number;
-        else if (operator) color = "#ffb86c";
+        else if (operator) color = syntaxColors.operator;
 
         tokens.push(React.createElement(Text, { key: match.index, style: { color } }, full));
         lastIndex = regex.lastIndex;
@@ -182,7 +183,8 @@ const CodeEditor = ({ value, onChange, style }: { value: string, onChange: (v: s
             autoCapitalize: "none",
             autoCorrect: false,
             spellCheck: false,
-            selectionColor: "rgba(255,255,255,0.3)"
+            selectionColor: "rgba(255,255,255,0.3)",
+            underlineColorAndroid: "transparent"
         })
     );
 };
@@ -249,9 +251,10 @@ const styles = StyleSheet.create({
       padding: 12,
   },
   codeText: {
-      fontFamily: "monospace",
+      fontFamily: Platform?.select({ ios: "Courier", android: "monospace" }) || "monospace",
       fontSize: 13,
       lineHeight: 18,
+      includeFontPadding: false,
   },
   textInputOverlay: {
       color: "transparent",
