@@ -12,6 +12,7 @@ const ChannelStore = findByProps("getChannel", "getChannels");
 const GuildStore = findByProps("getGuild", "getGuilds");
 const UserStore = findByProps("getCurrentUser", "getUser");
 const HTTP = findByProps("get", "post", "put");
+const { showToast } = findByProps("showToast") || {};
 
 // Fallback if findByProps fails for stores
 const InternalChannelStore = findByProps("getChannel", "getChannels") || findByProps("getChannel");
@@ -93,7 +94,20 @@ if (storage.total % 5 === 0) {
         content: "User has sent " + storage.total + " messages so far!"
     });
 }
-return content;`
+return content;`,
+  "Profanity Counter": `// Checks for profanity and keeps a total count
+return utils.fetch("https://vector.profanity.dev", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message: content })
+}).then(r => r.json()).then(res => {
+    if (res.isProfane) {
+        utils.storage.badWords = (utils.storage.badWords || 0) + 1;
+        utils.toast("Profanity detected! Total: " + utils.storage.badWords);
+        return content + "\\n-# ⚠️ Swear count: " + utils.storage.badWords;
+    }
+    return content;
+});`
 };
 
 const SNIPPETS = [
@@ -333,19 +347,34 @@ function pushLog(msg: string) {
     if (storage._logs.length > 50) storage._logs.pop();
 }
 
-function addAutoNote(content: string, notes: AutoNote[], utils: any, channelId: string): Promise<string | null> {
+function addAutoNote(content: string, notes: AutoNote[], baseUtils: any, channelId: string): Promise<string | null> {
   if (typeof content !== "string") return Promise.resolve(content);
   let matchedSpecific = false;
+  let finalContent = content;
 
   const runScript = (note: AutoNote, currentContent: string) => {
     if (!note.script) return Promise.resolve(currentContent);
     try {
       const data = note.data || {};
+      if (!storage._global) storage._global = {};
+      
+      let scriptContent = currentContent;
+      const utils = {
+          ...baseUtils,
+          storage: storage._global,
+          toast: (msg: string) => showToast?.(msg),
+          content: (c: string) => { scriptContent = c; return c; }
+      };
+
       const scriptFn = new Function("content", "note", "utils", "storage", note.script);
-      return Promise.resolve(scriptFn(currentContent, note, utils, data)).then(result => {
+      const scriptReturn = scriptFn(currentContent, note, utils, data);
+
+      return Promise.resolve(scriptReturn).then(result => {
           note.data = data;
           if (result === null) return null;
-          return typeof result === "string" ? result : currentContent;
+          const resolved = typeof result === "string" ? result : scriptContent;
+          finalContent = resolved;
+          return resolved;
       }).catch(e => {
           pushLog(`Error in ${note.trigger || "Global"}: ${e.message}`);
           console.error("[AutoNote] Script error:", e);
@@ -448,6 +477,7 @@ patches.push(instead("sendMessage", MessageActions, (args, orig) => {
     const utils = {
         channel: channel?.name || (channel?.type === 1 ? "Direct Message" : "Unknown"),
         channelID: channelId,
+        channelType: channel?.type === 1 || channel?.type === 3 ? 0 : 1, // 0 for DMs/Group DMs, 1 for Guilds
         server: guild?.name || (channel?.type === 1 ? "DMs" : "Direct Message"),
         serverID: guild?.id || "0",
         user: user,
@@ -455,10 +485,23 @@ patches.push(instead("sendMessage", MessageActions, (args, orig) => {
         delete: (messageId: string) => MessageActions.deleteMessage?.(channelId, messageId),
         edit: (messageId: string, msg: string) => MessageActions.editMessage?.(channelId, messageId, { content: msg }),
         copy: (text: string) => Clipboard?.setString?.(text),
-        fetch: (url: string, opts?: any) => fetch(url, opts),
+        fetch: (url: string, opts?: any) => {
+            const method = opts?.method?.toLowerCase() || "get";
+            if (HTTP && (HTTP as any)[method]) {
+                return (HTTP as any)[method]({ url, body: opts?.body, headers: opts?.headers }).then((res: any) => ({
+                    ok: res.ok || (res.status >= 200 && res.status < 300),
+                    status: res.status,
+                    json: () => Promise.resolve(res.body),
+                    text: () => Promise.resolve(typeof res.body === "string" ? res.body : JSON.stringify(res.body))
+                }));
+            }
+            return fetch(url, opts);
+        },
         log: (...args: any[]) => pushLog(args.map(a => typeof a === "object" ? JSON.stringify(a) : String(a)).join(" ")),
+        toast: (msg: string) => showToast?.(msg),
         sleep: (ms: number) => new Promise(res => setTimeout(res, ms)),
         stop: () => null,
+        content: (newContent: string) => { return newContent; }, // Handled in runScript
         webhook: (urlOrData: string | any, data?: any) => {
             const url = typeof urlOrData === "string" ? urlOrData : urlOrData?.url;
             const payload = typeof urlOrData === "string" ? data : urlOrData;
@@ -602,7 +645,11 @@ export const settings = () => {
       ),
       React.createElement(TableRowGroup, { title: "Documentation" },
           React.createElement(TableRow, { label: "Placeholders", subLabel: "{trigger}, {time}, {date}, {wordCount}, {clipboard}, {random:A,B}, {api:url}, {channel}, {channelID}, {server}, {serverID}, {user}, {mention:ID}" }),
-          React.createElement(TableRow, { label: "Script Context", subLabel: "content, note, storage, utils (send, delete, edit, copy, runAfter, fetch, log, webhook, sleep, stop)" }),
+          React.createElement(TableRow, { label: "Script Context", subLabel: "content, note, storage, utils (send, delete, edit, copy, runAfter, fetch, log, webhook, sleep, stop, content, channelType, toast, storage)" }),
+          React.createElement(TableRow, { label: "utils.channelType", subLabel: "0 for DMs/Groups, 1 for Guilds." }),
+          React.createElement(TableRow, { label: "utils.content(text)", subLabel: "Directly sets the final message content from within a script." }),
+          React.createElement(TableRow, { label: "utils.toast(msg)", subLabel: "Shows a small popup at the bottom of the screen." }),
+          React.createElement(TableRow, { label: "utils.storage", subLabel: "Global storage shared across all scripts." }),
           React.createElement(TableRow, { label: "utils.runAfter(cb)", subLabel: "Runs a callback after the message is sent. Callback receives the message 'id'. Useful for delayed actions like auto-delete." })
       )
     ),
