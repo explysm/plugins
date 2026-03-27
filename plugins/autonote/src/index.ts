@@ -3,7 +3,7 @@ import { React, ReactNative } from "@vendetta/metro/common";
 import { after, before, instead } from "@vendetta/patcher";
 import { storage } from "@vendetta/plugin";
 
-const { ScrollView, Text, TouchableOpacity, StyleSheet, View, LayoutAnimation, TextInput: RNTextInput, Platform } = ReactNative;
+const { ScrollView, Text, TouchableOpacity, StyleSheet, View, LayoutAnimation, TextInput: RNTextInput, Platform, Alert } = ReactNative;
 
 // Find internal modules
 const MessageActions = findByProps("sendMessage", "receiveMessage");
@@ -110,56 +110,12 @@ const SNIPPETS = [
 
 const COMMON_EMOJIS = ["📝", "🥷", "🤖", "📢", "💬", "✨", "🔥", "🌈", "🛡️", "🚀", "⚠️", "✅", "❌", "📦", "🔗", "💰", "🎮", "🎵", "📷", "💡"];
 
-const syntaxColors = {
-    keyword: "#ff79c6",
-    string: "#f1fa8c",
-    comment: "#6272a4",
-    function: "#50fa7b",
-    number: "#bd93f9",
-    operator: "#ffb86c",
-    text: "#f8f8f2"
-};
-
-const highlightJS = (code: string) => {
-    if (!code) return [];
-    const tokens = [];
-    // 1: Comments, 2: Strings, 3: Keywords, 4: Builtins, 5: Numbers, 6: Operators, 7: Words
-    const regex = /(\/\*[\s\S]*?\*\/|\/\/.*)|("(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|`(?:\\[\s\S]|[^`\\])*`)|(\b(?:const|let|var|if|else|for|while|return|function|async|await|new|try|catch|null|undefined|true|false|class|extends|constructor|super|this|import|export|from|default|switch|case|break|continue|throw|try|catch|finally|delete|typeof|instanceof|void|in|of|debugger)\b)|(\b(?:utils|storage|console|Math|JSON|Promise|Object|Array|String|Number|Boolean|RegExp|Error|Map|Set|fetch|setTimeout|setInterval|clearTimeout|clearInterval)\b)|(\b0x[0-9a-fA-F]+\b|\b\d+(?:\.\d+)?(?:e[+-]?\d+)?\b)|([^\s\w]+)|(\w+)/g;
-    let match;
-    let lastIndex = 0;
-
-    while ((match = regex.exec(code)) !== null) {
-        if (match.index > lastIndex) {
-            tokens.push(React.createElement(Text, { key: `gap-${lastIndex}`, style: { color: syntaxColors.text } }, code.substring(lastIndex, match.index)));
-        }
-
-        const [full, comment, string, keyword, builtin, number, operator] = match;
-        
-        let color = syntaxColors.text;
-        if (comment) color = syntaxColors.comment;
-        else if (string) color = syntaxColors.string;
-        else if (keyword) color = syntaxColors.keyword;
-        else if (builtin) color = syntaxColors.function;
-        else if (number) color = syntaxColors.number;
-        else if (operator) color = syntaxColors.operator;
-
-        tokens.push(React.createElement(Text, { key: match.index, style: { color } }, full));
-        lastIndex = regex.lastIndex;
-    }
-
-    if (lastIndex < code.length) {
-        tokens.push(React.createElement(Text, { key: "last", style: { color: syntaxColors.text } }, code.substring(lastIndex)));
-    }
-
-    return tokens;
-};
-
 const CodeEditor = ({ value, onChange, style }: { value: string, onChange: (v: string) => void, style?: any }) => {
     const handleTextChange = (text: string) => {
         // Basic Auto-Indent
         if (text.length > value.length && text.endsWith("\n")) {
             const lines = text.split("\n");
-            const lastLine = lines[lines.length - 2]; // Line before the new one
+            const lastLine = lines[lines.length - 2]; 
             const indentMatch = lastLine.match(/^(\s*)/);
             if (indentMatch) {
                 let indent = indentMatch[1];
@@ -171,22 +127,17 @@ const CodeEditor = ({ value, onChange, style }: { value: string, onChange: (v: s
         onChange(text);
     };
 
-    return React.createElement(View, { style: [styles.editorContainer, style] },
-        React.createElement(View, { style: styles.highlighterContainer, pointerEvents: "none" },
-            React.createElement(Text, { style: styles.codeText }, highlightJS(value))
-        ),
-        React.createElement(RNTextInput, {
-            style: [styles.codeText, styles.textInputOverlay],
-            multiline: true,
-            value: value,
-            onChangeText: handleTextChange,
-            autoCapitalize: "none",
-            autoCorrect: false,
-            spellCheck: false,
-            selectionColor: "rgba(255,255,255,0.3)",
-            underlineColorAndroid: "transparent"
-        })
-    );
+    return React.createElement(RNTextInput, {
+        style: [styles.editorContainer, styles.codeText, style],
+        multiline: true,
+        value: value,
+        onChangeText: handleTextChange,
+        autoCapitalize: "none",
+        autoCorrect: false,
+        spellCheck: false,
+        selectionColor: "rgba(255,255,255,0.3)",
+        underlineColorAndroid: "transparent"
+    });
 };
 
 const styles = StyleSheet.create({
@@ -241,26 +192,16 @@ const styles = StyleSheet.create({
      backgroundColor: "rgba(0,0,0,0.25)",
      borderRadius: 12,
      marginTop: 8,
+     padding: 12,
      minHeight: 100,
-     position: "relative",
-     overflow: "hidden"
-  },
-  highlighterContainer: {
-      position: "absolute",
-      top: 0, left: 0, right: 0, bottom: 0,
-      padding: 12,
+     textAlignVertical: "top",
   },
   codeText: {
       fontFamily: Platform?.select({ ios: "Courier", android: "monospace" }) || "monospace",
       fontSize: 13,
       lineHeight: 18,
       includeFontPadding: false,
-  },
-  textInputOverlay: {
-      color: "transparent",
-      padding: 12,
-      minHeight: 100,
-      textAlignVertical: "top",
+      color: "#f8f8f2",
   },
   modalContent: {
     flex: 1,
@@ -274,17 +215,20 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   snippetScroll: {
-      flexDirection: "row",
-      marginBottom: 12,
+      marginBottom: 10,
+      height: 28,
+      flexGrow: 0,
   },
   snippetTag: {
-      backgroundColor: "#313338",
-      paddingHorizontal: 8,
-      paddingVertical: 4,
-      borderRadius: 12,
+      backgroundColor: "#4e5058",
+      paddingHorizontal: 10,
+      borderRadius: 6,
       marginRight: 6,
+      height: 24,
+      justifyContent: "center",
+      alignItems: "center",
       borderWidth: 1,
-      borderColor: "rgba(255,255,255,0.1)",
+      borderColor: "rgba(255,255,255,0.05)",
   },
   logItem: {
       padding: 8,
@@ -544,6 +488,7 @@ export const onUnload = () => patches.forEach(p => p());
 
 export const settings = () => {
   const [notes, setNotes] = React.useState<AutoNote[]>(() => storage.notes);
+  const [search, setSearch] = React.useState("");
   const [collapsed, setCollapsed] = React.useState<Record<string, boolean>>(() => {
       const initial: Record<string, boolean> = {};
       notes.forEach(n => { initial[n.id] = true; });
@@ -572,13 +517,35 @@ export const settings = () => {
     const newNote: AutoNote = { id: Math.random().toString(36).slice(2), enabled: true, trigger: "", footer: "", removeTrigger: false, style: "none", position: "bottom", data: {}, icon: "📝", ...profile };
     updateNotes([...notes, newNote]);
   };
-  const deleteNote = (id: string) => { LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut); updateNotes(notes.filter(n => n.id !== id)); };
+
+  const deleteNote = (id: string) => { 
+    Alert.alert("Delete Profile", "Are you sure you want to delete this profile? This cannot be undone.", [
+        { text: "Cancel", style: "cancel" },
+        { text: "Delete", style: "destructive", onPress: () => {
+            LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut); 
+            updateNotes(notes.filter(n => n.id !== id)); 
+        }}
+    ]);
+  };
+
   const updateNote = (id: string, partial: Partial<AutoNote>) => updateNotes(notes.map(n => (n.id === id ? { ...n, ...partial } : n)));
+
+  const filteredNotes = notes.filter(n => 
+    (n.trigger || "").toLowerCase().includes(search.toLowerCase()) || 
+    (n.footer || "").toLowerCase().includes(search.toLowerCase())
+  );
 
   return React.createElement(ScrollView, { style: { flex: 1 } },
     React.createElement(Stack, { spacing: 8, style: { padding: 10 } },
-      notes.map((note, idx) =>
-        React.createElement(View, { key: note.id, style: styles.card },
+      React.createElement(TextInput, { 
+        placeholder: "Search profiles...", 
+        value: search, 
+        onChange: (v: string) => setSearch(v),
+        style: { marginBottom: 8 }
+      }),
+      filteredNotes.map((note) => {
+        const idx = notes.findIndex(n => n.id === note.id);
+        return React.createElement(View, { key: note.id, style: styles.card },
           React.createElement(View, { style: styles.headerRow },
             React.createElement(TouchableOpacity, { onPress: () => toggleCollapsed(note.id), style: { flex: 1, flexDirection: "row", alignItems: "center" } },
                 React.createElement(Text, { style: { color: "white", fontWeight: "bold", fontSize: 16 } }, 
@@ -619,8 +586,8 @@ export const settings = () => {
             ),
             React.createElement(TouchableOpacity, { style: styles.deleteButton, onPress: () => deleteNote(note.id) }, React.createElement(Text, { style: styles.deleteButtonText }, "Delete Profile"))
           )
-        )
-      ),
+        );
+      }),
       React.createElement(TouchableOpacity, { style: styles.addButton, onPress: () => addNote() }, React.createElement(Text, { style: styles.buttonText }, "+ Add Profile")),
       React.createElement(TouchableOpacity, { style: [styles.addButton, { backgroundColor: "#4e5058" }], onPress: () => {
           Promise.resolve(Clipboard.getString()).then(data => { try { const p = JSON.parse(data); delete p.id; addNote(p); } catch(e) {} });
@@ -643,9 +610,14 @@ export const settings = () => {
     modalScript && React.createElement(ReactNative.Modal, { visible: true, animationType: "slide" },
         React.createElement(View, { style: styles.modalContent },
             React.createElement(Text, { style: styles.modalHeader }, "Script Editor"),
-            React.createElement(ScrollView, { horizontal: true, style: styles.snippetScroll, showsHorizontalScrollIndicator: false },
+            React.createElement(ScrollView, { 
+                horizontal: true, 
+                style: styles.snippetScroll, 
+                contentContainerStyle: { alignItems: "center", paddingRight: 10 },
+                showsHorizontalScrollIndicator: false 
+            },
                 SNIPPETS.map(s => React.createElement(TouchableOpacity, { key: s.label, style: styles.snippetTag, onPress: () => setModalScript({ ...modalScript, code: modalScript.code + "\n" + s.code }) },
-                    React.createElement(Text, { style: { color: "#eee", fontSize: 11 } }, s.label)
+                    React.createElement(Text, { style: { color: "#eee", fontSize: 11, fontWeight: "600" } }, s.label)
                 ))
             ),
             React.createElement(View, { style: { flex: 1, backgroundColor: "rgba(0,0,0,0.3)", borderRadius: 16, overflow: "hidden" } },
@@ -656,7 +628,15 @@ export const settings = () => {
                 })
             ),
             React.createElement(View, { style: { flexDirection: "row", gap: 12, marginTop: 16 } },
-                React.createElement(TouchableOpacity, { style: [styles.addButton, { flex: 1, marginBottom: 0, backgroundColor: "#23a55a" }], onPress: () => { updateNote(modalScript.id, { script: modalScript.code }); setModalScript(null); } }, React.createElement(Text, { style: styles.buttonText }, "SAVE")),
+                React.createElement(TouchableOpacity, { style: [styles.addButton, { flex: 1, marginBottom: 0, backgroundColor: "#23a55a" }], onPress: () => { 
+                    try {
+                        if (modalScript.code.trim()) new Function("content", "note", "utils", "storage", modalScript.code);
+                        updateNote(modalScript.id, { script: modalScript.code }); 
+                        setModalScript(null); 
+                    } catch(e) {
+                        Alert.alert("Syntax Error", e.message);
+                    }
+                } }, React.createElement(Text, { style: styles.buttonText }, "SAVE")),
                 React.createElement(TouchableOpacity, { style: [styles.addButton, { flex: 1, marginBottom: 0, backgroundColor: "#f04747" }], onPress: () => setModalScript(null) }, React.createElement(Text, { style: styles.buttonText }, "CANCEL"))
             )
         )
