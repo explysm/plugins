@@ -13,6 +13,10 @@ const GuildStore = findByProps("getGuild", "getGuilds");
 const UserStore = findByProps("getCurrentUser", "getUser");
 const HTTP = findByProps("get", "post", "put");
 
+// Fallback if findByProps fails for stores
+const InternalChannelStore = findByProps("getChannel", "getChannels") || findByProps("getChannel");
+const InternalGuildStore = findByProps("getGuild", "getGuilds") || findByProps("getGuild");
+
 // UI Components
 const TableRowGroup = findByProps("TableRowGroup")?.TableRowGroup;
 const TableRow = findByProps("TableRow")?.TableRow;
@@ -93,20 +97,94 @@ return content;`
 };
 
 const SNIPPETS = [
-    { label: "utils.send()", code: 'utils.send("Hello World");' },
-    { label: "utils.fetch()", code: 'utils.fetch("URL").then(r => r.json())' },
-    { label: "utils.delete()", code: 'utils.delete(id);' },
-    { label: "utils.copy()", code: 'utils.copy(content);' },
-    { label: "utils.sleep()", code: 'await utils.sleep(1000);' },
-    { label: "utils.webhook()", code: 'utils.webhook("URL", { content: "msg" });' },
-    { label: "Conditional", code: 'if (content.includes("test")) {\n  return "Match!";\n}' }
+    { label: "send", code: 'utils.send("");' },
+    { label: "fetch", code: 'utils.fetch("").then(r => r.json())' },
+    { label: "delete", code: 'utils.delete(id);' },
+    { label: "copy", code: 'utils.copy(content);' },
+    { label: "sleep", code: 'await utils.sleep(1000);' },
+    { label: "webhook", code: 'utils.webhook("", { content: "" });' },
+    { label: "log", code: 'utils.log("");' },
+    { label: "runAfter", code: 'utils.runAfter(id => {\n  \n});' },
+    { label: "if", code: 'if (content.includes("")) {\n  \n}' }
 ];
 
 const COMMON_EMOJIS = ["📝", "🥷", "🤖", "📢", "💬", "✨", "🔥", "🌈", "🛡️", "🚀", "⚠️", "✅", "❌", "📦", "🔗", "💰", "🎮", "🎵", "📷", "💡"];
 
+const syntaxColors = {
+    keyword: "#ff79c6",
+    string: "#f1fa8c",
+    comment: "#6272a4",
+    function: "#50fa7b",
+    number: "#bd93f9",
+    text: "#f8f8f2"
+};
+
+const highlightJS = (code: string) => {
+    if (!code) return [];
+    const tokens = [];
+    const regex = /(\/\/.*)|(".*?"|'.*?'|`.*?`)|(\b(const|let|var|if|else|for|while|return|function|async|await|new|try|catch|null|undefined|true|false)\b)|(\b(utils|storage|console|Math|JSON|Promise)\b)|(\d+)|([^\s\w]+)|(\w+)/g;
+    let match;
+    let lastIndex = 0;
+
+    while ((match = regex.exec(code)) !== null) {
+        const [full, comment, string, keyword, builtin, number, operator, word] = match;
+        
+        let color = syntaxColors.text;
+        if (comment) color = syntaxColors.comment;
+        else if (string) color = syntaxColors.string;
+        else if (keyword) color = syntaxColors.keyword;
+        else if (builtin) color = syntaxColors.function;
+        else if (number) color = syntaxColors.number;
+        else if (operator) color = "#ffb86c";
+
+        tokens.push(React.createElement(Text, { key: match.index, style: { color } }, full));
+        lastIndex = regex.lastIndex;
+    }
+
+    if (lastIndex < code.length) {
+        tokens.push(React.createElement(Text, { key: "last", style: { color: syntaxColors.text } }, code.substring(lastIndex)));
+    }
+
+    return tokens;
+};
+
+const CodeEditor = ({ value, onChange, style }: { value: string, onChange: (v: string) => void, style?: any }) => {
+    const handleTextChange = (text: string) => {
+        // Basic Auto-Indent
+        if (text.length > value.length && text.endsWith("\n")) {
+            const lines = value.split("\n");
+            const lastLine = lines[lines.length - 1];
+            const indentMatch = lastLine.match(/^(\s*)/);
+            if (indentMatch) {
+                const indent = indentMatch[1];
+                const extraIndent = lastLine.trim().endsWith("{") ? "  " : "";
+                onChange(text + indent + extraIndent);
+                return;
+            }
+        }
+        onChange(text);
+    };
+
+    return React.createElement(View, { style: [styles.editorContainer, style] },
+        React.createElement(View, { style: styles.highlighterContainer, pointerEvents: "none" },
+            React.createElement(Text, { style: styles.codeText }, highlightJS(value))
+        ),
+        React.createElement(RNTextInput, {
+            style: [styles.codeText, styles.textInputOverlay],
+            multiline: true,
+            value: value,
+            onChangeText: handleTextChange,
+            autoCapitalize: "none",
+            autoCorrect: false,
+            spellCheck: false,
+            selectionColor: "rgba(255,255,255,0.3)"
+        })
+    );
+};
+
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: "#2b2d31", // M3-like Surface
+    backgroundColor: "#2b2d31",
     borderRadius: 16,
     padding: 16,
     marginBottom: 12,
@@ -152,14 +230,29 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     fontSize: 14,
   },
-  scriptInput: {
-     fontFamily: "monospace",
-     fontSize: 13,
+  editorContainer: {
      backgroundColor: "rgba(0,0,0,0.25)",
      borderRadius: 12,
-     padding: 12,
-     color: "#e0e0e0",
      marginTop: 8,
+     minHeight: 100,
+     position: "relative",
+     overflow: "hidden"
+  },
+  highlighterContainer: {
+      position: "absolute",
+      top: 0, left: 0, right: 0, bottom: 0,
+      padding: 12,
+  },
+  codeText: {
+      fontFamily: "monospace",
+      fontSize: 13,
+      lineHeight: 18,
+  },
+  textInputOverlay: {
+      color: "transparent",
+      padding: 12,
+      minHeight: 100,
+      textAlignVertical: "top",
   },
   modalContent: {
     flex: 1,
@@ -178,7 +271,7 @@ const styles = StyleSheet.create({
   },
   snippetTag: {
       backgroundColor: "#313338",
-      paddingHorizontal: 12,
+      paddingHorizontal: 10,
       paddingVertical: 6,
       borderRadius: 20,
       marginRight: 8,
@@ -212,8 +305,8 @@ function processPlaceholders(text: string, triggerMatch: string, content: string
   if (typeof text !== "string") return Promise.resolve("");
   const now = new Date();
   
-  const channel = ChannelStore?.getChannel?.(channelId);
-  const guild = ChannelStore?.getGuild?.(channelId) || GuildStore?.getGuild?.(channel?.guild_id);
+  const channel = (InternalChannelStore || ChannelStore)?.getChannel?.(channelId);
+  const guild = (InternalGuildStore || GuildStore)?.getGuild?.(channel?.guild_id);
   const user = UserStore?.getCurrentUser?.();
 
   let result = text
@@ -221,9 +314,9 @@ function processPlaceholders(text: string, triggerMatch: string, content: string
     .replace(/{time}/g, now.toLocaleTimeString())
     .replace(/{date}/g, now.toLocaleDateString())
     .replace(/{wordCount}/g, String((content || "").split(/\s+/).filter(Boolean).length))
-    .replace(/{channel}/g, channel?.name || "Unknown")
+    .replace(/{channel}/g, channel?.name || (channel?.type === 1 ? "Direct Message" : "Unknown"))
     .replace(/{channelID}/g, channelId)
-    .replace(/{server}/g, guild?.name || "Direct Message")
+    .replace(/{server}/g, guild?.name || (channel?.type === 1 ? "DMs" : "Direct Message"))
     .replace(/{serverID}/g, guild?.id || "0")
     .replace(/{user}/g, user?.username || "Unknown")
     .replace(/{mention:(\d+)}/g, (_, id) => `<@${id}>`);
@@ -395,15 +488,15 @@ patches.push(instead("sendMessage", MessageActions, (args, orig) => {
     const message = args[1];
     if (typeof message?.content !== "string" || message?.__autoNoteProcessed) return orig(...args);
     
-    const channel = ChannelStore?.getChannel?.(channelId);
-    const guild = ChannelStore?.getGuild?.(channelId) || GuildStore?.getGuild?.(channel?.guild_id);
+    const channel = (InternalChannelStore || ChannelStore)?.getChannel?.(channelId);
+    const guild = (InternalGuildStore || GuildStore)?.getGuild?.(channel?.guild_id);
     const user = UserStore?.getCurrentUser?.();
 
     const afterCallbacks: ((id: string) => void)[] = [];
     const utils = {
-        channel: channel?.name || "Unknown",
+        channel: channel?.name || (channel?.type === 1 ? "Direct Message" : "Unknown"),
         channelID: channelId,
-        server: guild?.name || "Direct Message",
+        server: guild?.name || (channel?.type === 1 ? "DMs" : "Direct Message"),
         serverID: guild?.id || "0",
         user: user,
         send: (msg: string) => MessageActions.sendMessage(channelId, { content: msg, __autoNoteProcessed: true }),
@@ -506,9 +599,8 @@ export const settings = () => {
               ),
               React.createElement(View, { style: { padding: 16 } },
                   React.createElement(Text, { style: { color: "#bbb", marginBottom: 8, fontSize: 12 } }, "Custom Script (JS)"),
-                  React.createElement(RNTextInput, {
-                    placeholder: "utils.runAfter(id => utils.delete(id));",
-                    multiline: true, value: note.script || "", onChangeText: (v: string) => updateNote(note.id, { script: v }), style: [styles.scriptInput, { maxHeight: 100 }]
+                  React.createElement(CodeEditor, {
+                    value: note.script || "", onChange: (v: string) => updateNote(note.id, { script: v })
                   }),
                   React.createElement(View, { style: { flexDirection: "row", gap: 8 } },
                       React.createElement(TouchableOpacity, { style: [styles.secondaryButton, { flex: 1 }], onPress: () => setModalScript({ id: note.id, code: note.script || "" }) }, React.createElement(Text, { style: styles.buttonText }, "🖥️ Editor")),
@@ -532,6 +624,11 @@ export const settings = () => {
               logs.map((log, i) => React.createElement(View, { key: i, style: styles.logItem }, React.createElement(Text, { style: { color: "#ccc", fontSize: 12, fontFamily: "monospace" } }, log))),
               React.createElement(TouchableOpacity, { style: [styles.secondaryButton, { marginTop: 10 }], onPress: () => { storage._logs = []; setLogs([]); } }, React.createElement(Text, { style: styles.buttonText }, "Clear Logs"))
           )
+      ),
+      React.createElement(TableRowGroup, { title: "Documentation" },
+          React.createElement(TableRow, { label: "Placeholders", subLabel: "{trigger}, {time}, {date}, {wordCount}, {clipboard}, {random:A,B}, {api:url}, {channel}, {channelID}, {server}, {serverID}, {user}, {mention:ID}" }),
+          React.createElement(TableRow, { label: "Script Context", subLabel: "content, note, storage, utils (send, delete, edit, copy, runAfter, fetch, log, webhook, sleep, stop)" }),
+          React.createElement(TableRow, { label: "utils.runAfter(cb)", subLabel: "Runs a callback after the message is sent. Callback receives the message 'id'. Useful for delayed actions like auto-delete." })
       )
     ),
 
@@ -544,11 +641,10 @@ export const settings = () => {
                 ))
             ),
             React.createElement(View, { style: { flex: 1, backgroundColor: "rgba(0,0,0,0.3)", borderRadius: 16, overflow: "hidden" } },
-                React.createElement(RNTextInput, {
-                    style: [styles.scriptInput, { flex: 1, textAlignVertical: "top", marginTop: 0 }],
-                    multiline: true,
+                React.createElement(CodeEditor, {
+                    style: { flex: 1, minHeight: "100%" },
                     value: modalScript.code,
-                    onChangeText: (v: string) => setModalScript({ ...modalScript, code: v })
+                    onChange: (v: string) => setModalScript({ ...modalScript, code: v })
                 })
             ),
             React.createElement(View, { style: { flexDirection: "row", gap: 12, marginTop: 16 } },
