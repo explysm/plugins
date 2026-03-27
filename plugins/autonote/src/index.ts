@@ -27,11 +27,13 @@ const TextInput = findByProps("TextInput")?.TextInput;
 
 type NoteStyle = "none" | "subtext" | "blockquote" | "code";
 type NotePosition = "top" | "bottom";
+type MatchMode = "starts_with" | "contains" | "exact" | "regex";
 
 interface AutoNote {
   id: string;
   enabled: boolean;
   trigger: string;
+  matchMode?: MatchMode;
   footer: string;
   removeTrigger: boolean;
   style: NoteStyle;
@@ -45,6 +47,19 @@ interface AutoNote {
 }
 
 const TEMPLATES: Record<string, string> = {
+  "Webhook: Embed": `// Sends a rich embed via Webhook
+utils.webhook("WEBHOOK_URL", {
+    name: utils.user.username,
+    avatar: utils.user.avatarURL,
+    embeds: [{
+        title: "AutoNote Embed",
+        description: content,
+        color: 0x5865f2,
+        timestamp: new Date().toISOString(),
+        footer: { text: "Sent from #" + utils.channel }
+    }]
+});
+return null; // Cancel original message`,
   "Auto-Splitter": `// Splits long messages into multiple parts
 const MAX_LENGTH = 2000;
 if (content.length <= MAX_LENGTH) return content;
@@ -397,15 +412,20 @@ function addAutoNote(content: string, notes: AutoNote[], baseUtils: any, channel
         let triggerRegex: RegExp;
 
         try {
-            if (note.isRegex) {
-                if (!note.trigger) return current;
+            const mode = note.matchMode || (note.isRegex ? "regex" : "starts_with");
+            const escapedTrigger = note.trigger.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            
+            if (mode === "regex") {
                 triggerRegex = new RegExp(note.trigger, "i");
-                match = current.match(triggerRegex);
-            } else {
-                const escapedTrigger = note.trigger.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            } else if (mode === "contains") {
+                triggerRegex = new RegExp(escapedTrigger, "i");
+            } else if (mode === "exact") {
+                triggerRegex = new RegExp("^\\s*" + escapedTrigger + "\\s*$", "i");
+            } else { // starts_with
                 triggerRegex = new RegExp("^\\s*" + escapedTrigger + "(?![\\w])", "i");
-                match = current.match(triggerRegex);
             }
+            
+            match = current.match(triggerRegex);
         } catch(e) { return current; }
 
         if (!match) return current;
@@ -456,13 +476,14 @@ function addAutoNote(content: string, notes: AutoNote[], baseUtils: any, channel
 function validateStorage() {
     try {
         if (!Array.isArray(storage.notes)) {
-            storage.notes = [{ id: Math.random().toString(36).slice(2), enabled: true, trigger: "@silent", footer: "Sent as {trigger}", removeTrigger: false, style: "subtext", position: "bottom", data: {}, icon: "🥷" }];
+            storage.notes = [{ id: Math.random().toString(36).slice(2), enabled: true, trigger: "@silent", footer: "Sent as {trigger}", removeTrigger: false, style: "subtext", position: "bottom", data: {}, icon: "🥷", matchMode: "starts_with" }];
         } else {
             // Ensure all notes have an ID and necessary fields
             storage.notes = storage.notes.map(n => ({
                 id: n.id || Math.random().toString(36).slice(2),
                 enabled: n.enabled !== false,
                 trigger: n.trigger || "",
+                matchMode: n.matchMode || (n.isRegex ? "regex" : "starts_with"),
                 footer: n.footer || "",
                 removeTrigger: !!n.removeTrigger,
                 style: n.style || "none",
@@ -503,7 +524,10 @@ patches.push(instead("sendMessage", MessageActions, (args, orig) => {
         channelType: channel?.type === 1 || channel?.type === 3 ? 0 : 1, // 0 for DMs/Group DMs, 1 for Guilds
         server: guild?.name || (channel?.type === 1 ? "DMs" : "Direct Message"),
         serverID: guild?.id || "0",
-        user: user,
+        user: {
+            ...user,
+            avatarURL: user ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.${user.avatar?.startsWith("a_") ? "gif" : "png"}?size=1024` : null
+        },
         send: (msg: string) => MessageActions.sendMessage(channelId, { content: msg, __autoNoteProcessed: true }),
         delete: (messageId: string) => MessageActions.deleteMessage?.(channelId, messageId),
         edit: (messageId: string, msg: string) => MessageActions.editMessage?.(channelId, messageId, { content: msg }),
@@ -529,14 +553,20 @@ patches.push(instead("sendMessage", MessageActions, (args, orig) => {
             const url = typeof urlOrData === "string" ? urlOrData : urlOrData?.url;
             const payload = typeof urlOrData === "string" ? data : urlOrData;
             if (!url) return Promise.reject("No webhook URL provided");
-            const body = { content: payload?.content, username: payload?.name || payload?.username, avatar_url: payload?.avatar || payload?.avatar_url };
+            const body = { 
+                content: payload?.content, 
+                username: payload?.name || payload?.username, 
+                avatar_url: payload?.avatar || payload?.avatar_url,
+                embeds: payload?.embeds 
+            };
             if (HTTP?.post) return HTTP.post({ url, body, headers: { "Content-Type": "application/json" } });
             return fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
         },
         runAfter: (cb: (id: string) => void) => afterCallbacks.push(cb)
     };
 
-    return addAutoNote(message.content, storage.notes || [], utils, channelId).then(result => {
+    const notesSnapshot = Array.isArray(storage.notes) ? JSON.parse(JSON.stringify(storage.notes)) : [];
+    return addAutoNote(message.content, notesSnapshot, utils, channelId).then(result => {
         if (result === null) return { id: "0", channel_id: channelId, content: "", author: { id: "0", username: "Clyde" }, attachments: [], embeds: [], mentions: [], timestamp: new Date().toISOString() };
         message.content = result;
         const res = orig(...args);
@@ -613,6 +643,8 @@ export const settings = () => {
     (n.footer || "").toLowerCase().includes(search.toLowerCase())
   );
 
+  const matchModes: MatchMode[] = ["starts_with", "contains", "exact", "regex"];
+
   return React.createElement(ScrollView, { style: { flex: 1 } },
     React.createElement(Stack, { spacing: 8, style: { padding: 10 } },
       React.createElement(TextInput, { 
@@ -627,7 +659,7 @@ export const settings = () => {
           React.createElement(View, { style: styles.headerRow },
             React.createElement(TouchableOpacity, { onPress: () => toggleCollapsed(note.id), style: { flex: 1, flexDirection: "row", alignItems: "center" } },
                 React.createElement(Text, { style: { color: "white", fontWeight: "bold", fontSize: 16 } }, 
-                  `${collapsed[note.id] ? "▶" : "▼"} ${note.icon || "📝"} ${note.trigger ? (note.isRegex ? "/" + note.trigger + "/" : "Trigger: " + note.trigger) : "Global Fallback"}`
+                  `${collapsed[note.id] ? "▶" : "▼"} ${note.icon || "📝"} ${note.trigger ? (note.matchMode === "regex" ? "/" + note.trigger + "/" : (note.matchMode || "Starts With") + ": " + note.trigger) : "Global Fallback"}`
                 )
             ),
             React.createElement(View, { style: { flexDirection: "row" } },
@@ -641,7 +673,11 @@ export const settings = () => {
               React.createElement(TableSwitchRow, { label: "Enabled", value: note.enabled, onValueChange: (v: boolean) => updateNote(note.id, { enabled: v }) }),
               React.createElement(TableRow, { label: "Icon Emoji", subLabel: note.icon || "📝", onPress: () => setShowEmojiPicker(note.id) }),
               React.createElement(TextInput, { label: "Trigger Keyword", placeholder: "Global Fallback...", value: note.trigger, onChange: (v: string) => updateNote(note.id, { trigger: v }) }),
-              React.createElement(TableSwitchRow, { label: "Use Regex", value: note.isRegex || false, onValueChange: (v: boolean) => updateNote(note.id, { isRegex: v }) }),
+              React.createElement(TableRow, { label: "Match Mode", subLabel: (note.matchMode || "starts_with").replace("_", " ").toUpperCase(), onPress: () => {
+                  const currentIdx = matchModes.indexOf(note.matchMode || "starts_with");
+                  const nextMode = matchModes[(currentIdx + 1) % matchModes.length];
+                  updateNote(note.id, { matchMode: nextMode, isRegex: nextMode === "regex" });
+              }}),
               React.createElement(TableSwitchRow, { label: "Remove Trigger from Message", value: note.removeTrigger || false, onValueChange: (v: boolean) => updateNote(note.id, { removeTrigger: v }) }),
               React.createElement(TextInput, { label: "Note Text", placeholder: "Enter text...", value: note.footer, onChange: (v: string) => updateNote(note.id, { footer: v }), multiline: true }),
               React.createElement(TableRow, { label: "Position", subLabel: (note.position || "bottom").toUpperCase(), onPress: () => updateNote(note.id, { position: (note.position || "bottom") === "top" ? "bottom" : "top" }) }),
