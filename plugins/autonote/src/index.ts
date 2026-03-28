@@ -544,9 +544,14 @@ function getUtils(channelId: string, afterCallbacks?: any[]) {
         edit: (messageId: string, msg: string) => MessageActions.editMessage?.(channelId, messageId, { content: msg }),
         react: (msgId: string, emoji: string) => {
             const reactionEmoji = emoji.includes(":") ? { name: emoji.split(":")[0], id: emoji.split(":")[1] } : { name: emoji };
+            // First attempt
             setTimeout(() => {
                 ReactionActions?.addReaction?.(channelId, msgId, reactionEmoji);
-            }, 500);
+            }, 250);
+            // Second attempt for persistence
+            setTimeout(() => {
+                ReactionActions?.addReaction?.(channelId, msgId, reactionEmoji);
+            }, 800);
         },
         read: (count: number) => {
             const messages = MessageStore?.getMessages?.(channelId);
@@ -623,7 +628,8 @@ patches.push(instead("sendMessage", MessageActions, (args, orig) => {
     });
 }));
 
-const onMessageCreate = ({ message }: { message: any }) => {
+const onMessageCreate = (data: any) => {
+    const message = data.message || data;
     if (!message || !message.channel_id || !message.content || message.__autoNoteProcessed) return;
 
     const channelId = message.channel_id;
@@ -633,11 +639,11 @@ const onMessageCreate = ({ message }: { message: any }) => {
     addAutoNote(message.content, notesSnapshot, utils, channelId, message);
 };
 
-FluxDispatcher.subscribe("MESSAGE_CREATE", onMessageCreate);
+FluxDispatcher?.subscribe?.("MESSAGE_CREATE", onMessageCreate);
 
 export const onUnload = () => {
     patches.forEach(p => p());
-    FluxDispatcher.unsubscribe("MESSAGE_CREATE", onMessageCreate);
+    FluxDispatcher?.unsubscribe?.("MESSAGE_CREATE", onMessageCreate);
 };
 
 export const settings = () => {
