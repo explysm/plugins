@@ -7,6 +7,8 @@ const { ScrollView, Text, TouchableOpacity, StyleSheet, View, LayoutAnimation, T
 
 // Find internal modules
 const MessageActions = findByProps("sendMessage", "receiveMessage");
+const MessageStore = findByProps("getMessage", "getMessages");
+const ReactionActions = findByProps("addReaction", "removeReaction");
 const Clipboard = findByProps("setString", "getString");
 const ChannelStore = findByProps("getChannel", "getChannels");
 const GuildStore = findByProps("getGuild", "getGuilds");
@@ -133,6 +135,9 @@ const SNIPPETS = [
     { label: "wait", code: 'await utils.sleep(1000);' },
     { label: "hook", code: 'utils.webhook("", { content: "" });' },
     { label: "log", code: 'utils.log("");' },
+    { label: "react", code: 'utils.react(id, "🔥");' },
+    { label: "read", code: 'const msgs = utils.read(5);' },
+    { label: "onMsg", code: 'utils.onMessage("aura", "contains", (msg) => {\n  utils.react(msg.id, "🔥");\n});' },
     { label: "after", code: 'utils.runAfter(id => {\n  \n});' },
     { label: "if", code: 'if (content.includes("")) {\n  \n}' }
 ];
@@ -362,7 +367,7 @@ function pushLog(msg: string) {
     if (storage._logs.length > 50) storage._logs.pop();
 }
 
-function addAutoNote(content: string, notes: AutoNote[], baseUtils: any, channelId: string): Promise<string | null> {
+function addAutoNote(content: string, notes: AutoNote[], baseUtils: any, channelId: string, message?: any): Promise<string | null> {
   if (typeof content !== "string") return Promise.resolve(content);
   let matchedSpecific = false;
   let finalContent = content;
@@ -378,7 +383,19 @@ function addAutoNote(content: string, notes: AutoNote[], baseUtils: any, channel
           ...baseUtils,
           storage: storage._global,
           toast: (msg: string) => showToast?.(msg),
-          content: (c: string) => { scriptContent = c; return c; }
+          content: (c: string) => { scriptContent = c; return c; },
+          onMessage: (pattern: string, mode: string, cb: Function) => {
+              if (typeof cb !== "function") return;
+              const lowContent = (currentContent || "").toLowerCase();
+              const lowPattern = (pattern || "").toLowerCase();
+              let matched = false;
+              if (mode === "contains") matched = lowContent.includes(lowPattern);
+              else if (mode === "startswith") matched = lowContent.startsWith(lowPattern);
+              else if (mode === "match" || mode === "exact") matched = lowContent === lowPattern;
+              else if (mode === "regex") { try { matched = new RegExp(pattern, "i").test(currentContent); } catch(e) {} }
+              
+              if (matched) cb({ content: currentContent, id: message?.id, author: message?.author, channelId });
+          }
       };
 
       const scriptFn = new Function("content", "note", "utils", "storage", note.script);
@@ -506,19 +523,12 @@ function validateStorage() {
 
 validateStorage();
 
-const patches = [];
-
-patches.push(instead("sendMessage", MessageActions, (args, orig) => {
-    const channelId = args[0];
-    const message = args[1];
-    if (typeof message?.content !== "string" || message?.__autoNoteProcessed) return orig(...args);
-    
+function getUtils(channelId: string, afterCallbacks?: any[]) {
     const channel = (InternalChannelStore || ChannelStore)?.getChannel?.(channelId);
     const guild = (InternalGuildStore || GuildStore)?.getGuild?.(channel?.guild_id);
     const user = UserStore?.getCurrentUser?.();
 
-    const afterCallbacks: ((id: string) => void)[] = [];
-    const utils = {
+    return {
         channel: channel?.name || (channel?.type === 1 ? "Direct Message" : "Unknown"),
         channelID: channelId,
         channelType: channel?.type === 1 || channel?.type === 3 ? 0 : 1, // 0 for DMs/Group DMs, 1 for Guilds
@@ -531,6 +541,22 @@ patches.push(instead("sendMessage", MessageActions, (args, orig) => {
         send: (msg: string) => MessageActions.sendMessage(channelId, { content: msg, __autoNoteProcessed: true }),
         delete: (messageId: string) => MessageActions.deleteMessage?.(channelId, messageId),
         edit: (messageId: string, msg: string) => MessageActions.editMessage?.(channelId, messageId, { content: msg }),
+        react: (msgId: string, emoji: string) => {
+            const reactionEmoji = emoji.includes(":") ? { name: emoji.split(":")[0], id: emoji.split(":")[1] } : { name: emoji };
+            ReactionActions?.addReaction?.(channelId, msgId, reactionEmoji);
+        },
+        read: (count: number) => {
+            const messages = MessageStore?.getMessages?.(channelId);
+            if (!messages) return [];
+            const arr = messages.toArray?.() || Object.values(messages._ordered || {}) || [];
+            return arr.slice(-count).map((m: any) => ({
+                id: m.id,
+                content: m.content,
+                author: m.author,
+                timestamp: m.timestamp,
+                reactions: m.reactions
+            }));
+        },
         copy: (text: string) => Clipboard?.setString?.(text),
         fetch: (url: string, opts?: any) => {
             const method = opts?.method?.toLowerCase() || "get";
@@ -562,11 +588,22 @@ patches.push(instead("sendMessage", MessageActions, (args, orig) => {
             if (HTTP?.post) return HTTP.post({ url, body, headers: { "Content-Type": "application/json" } });
             return fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
         },
-        runAfter: (cb: (id: string) => void) => afterCallbacks.push(cb)
+        runAfter: (cb: (id: string) => void) => afterCallbacks?.push(cb)
     };
+}
+
+const patches = [];
+
+patches.push(instead("sendMessage", MessageActions, (args, orig) => {
+    const channelId = args[0];
+    const message = args[1];
+    if (typeof message?.content !== "string" || message?.__autoNoteProcessed) return orig(...args);
+    
+    const afterCallbacks: ((id: string) => void)[] = [];
+    const utils = getUtils(channelId, afterCallbacks);
 
     const notesSnapshot = Array.isArray(storage.notes) ? JSON.parse(JSON.stringify(storage.notes)) : [];
-    return addAutoNote(message.content, notesSnapshot, utils, channelId).then(result => {
+    return addAutoNote(message.content, notesSnapshot, utils, channelId, message).then(result => {
         if (result === null) return { id: "0", channel_id: channelId, content: "", author: { id: "0", username: "Clyde" }, attachments: [], embeds: [], mentions: [], timestamp: new Date().toISOString() };
         message.content = result;
         const res = orig(...args);
@@ -582,6 +619,20 @@ patches.push(instead("sendMessage", MessageActions, (args, orig) => {
         return orig(...args);
     });
 }));
+
+patches.push(before("receiveMessage", MessageActions, (args) => {
+    const channelId = args[0];
+    const message = args[1];
+    if (typeof message?.content !== "string") return;
+
+    const utils = getUtils(channelId);
+    const notesSnapshot = Array.isArray(storage.notes) ? JSON.parse(JSON.stringify(storage.notes)) : [];
+    
+    // We run addAutoNote but don't care about the return value (as we can't modify the message easily here)
+    // and we want to avoid double processing if we ever sent a message that triggered a fallback.
+    addAutoNote(message.content, notesSnapshot, utils, channelId, message);
+}));
+
 
 export const onUnload = () => patches.forEach(p => p());
 
@@ -719,7 +770,10 @@ export const settings = () => {
       ),
       React.createElement(TableRowGroup, { title: "Documentation" },
           React.createElement(TableRow, { label: "Placeholders", subLabel: "{trigger}, {time}, {date}, {wordCount}, {clipboard}, {random:A,B}, {api:url}, {channel}, {channelID}, {server}, {serverID}, {user}, {mention:ID}" }),
-          React.createElement(TableRow, { label: "Script Context", subLabel: "content, note, storage, utils (send, delete, edit, copy, runAfter, fetch, log, webhook, sleep, stop, content, channelType, toast, storage)" }),
+          React.createElement(TableRow, { label: "Script Context", subLabel: "content, note, storage, utils (send, delete, edit, react, read, onMessage, copy, runAfter, fetch, log, webhook, sleep, stop, content, channelType, toast, storage)" }),
+          React.createElement(TableRow, { label: "utils.react(id, emoji)", subLabel: "Reacts to a message. Emoji can be '🔥' or 'name:id'." }),
+          React.createElement(TableRow, { label: "utils.read(count)", subLabel: "Returns an array of the last 'count' messages in the channel." }),
+          React.createElement(TableRow, { label: "utils.onMessage(query, mode, cb)", subLabel: "Runs callback if message matches. Modes: contains, startswith, match, regex." }),
           React.createElement(TableRow, { label: "utils.channelType", subLabel: "0 for DMs/Groups, 1 for Guilds." }),
           React.createElement(TableRow, { label: "utils.content(text)", subLabel: "Directly sets the final message content from within a script." }),
           React.createElement(TableRow, { label: "utils.toast(msg)", subLabel: "Shows a small popup at the bottom of the screen." }),
