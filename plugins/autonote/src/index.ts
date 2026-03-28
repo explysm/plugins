@@ -390,10 +390,11 @@ function addAutoNote(content: string, notes: AutoNote[], baseUtils: any, channel
               const lowContent = (currentContent || "").toLowerCase();
               const lowPattern = (pattern || "").toLowerCase();
               let matched = false;
-              if (mode === "contains") matched = lowContent.includes(lowPattern);
-              else if (mode === "startswith") matched = lowContent.startsWith(lowPattern);
-              else if (mode === "match" || mode === "exact") matched = lowContent === lowPattern;
-              else if (mode === "regex") { try { matched = new RegExp(pattern, "i").test(currentContent); } catch(e) {} }
+              const m = mode?.toLowerCase();
+              if (m === "contains") matched = lowContent.includes(lowPattern);
+              else if (m === "startswith") matched = lowContent.startsWith(lowPattern);
+              else if (m === "match" || m === "exact" || m === "matches") matched = lowContent === lowPattern;
+              else if (m === "regex") { try { matched = new RegExp(pattern, "i").test(currentContent); } catch(e) {} }
               
               if (matched) cb({ content: currentContent, id: message?.id, author: message?.author, channelId });
           }
@@ -783,7 +784,7 @@ export const settings = () => {
           React.createElement(TableRow, { label: "Script Context", subLabel: "content, note, storage, utils (send, delete, edit, react, read, onMessage, copy, runAfter, fetch, log, webhook, sleep, stop, content, channelType, toast, storage)" }),
           React.createElement(TableRow, { label: "utils.react(id, emoji)", subLabel: "Reacts to a message. Emoji can be '🔥' or 'name:id'." }),
           React.createElement(TableRow, { label: "utils.read(count)", subLabel: "Returns an array of the last 'count' messages in the channel." }),
-          React.createElement(TableRow, { label: "utils.onMessage(query, mode, cb)", subLabel: "Runs callback if message matches. Modes: contains, startswith, match, regex." }),
+          React.createElement(TableRow, { label: "utils.onMessage(query, mode, cb)", subLabel: "Runs callback if message matches. Modes: contains, startswith, matches, regex." }),
           React.createElement(TableRow, { label: "utils.channelType", subLabel: "0 for DMs/Groups, 1 for Guilds." }),
           React.createElement(TableRow, { label: "utils.content(text)", subLabel: "Directly sets the final message content from within a script." }),
           React.createElement(TableRow, { label: "utils.toast(msg)", subLabel: "Shows a small popup at the bottom of the screen." }),
