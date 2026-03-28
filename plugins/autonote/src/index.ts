@@ -8,6 +8,7 @@ const { ScrollView, Text, TouchableOpacity, StyleSheet, View, LayoutAnimation, T
 // Find internal modules
 const MessageActions = findByProps("sendMessage", "receiveMessage");
 const MessageStore = findByProps("getMessage", "getMessages");
+const FluxDispatcher = findByProps("_dispatch", "dispatch");
 const ReactionActions = findByProps("addReaction", "removeReaction");
 const Clipboard = findByProps("setString", "getString");
 const ChannelStore = findByProps("getChannel", "getChannels");
@@ -137,7 +138,7 @@ const SNIPPETS = [
     { label: "log", code: 'utils.log("");' },
     { label: "react", code: 'utils.react(id, "🔥");' },
     { label: "read", code: 'const msgs = utils.read(5);' },
-    { label: "onMsg", code: 'utils.onMessage("aura", "contains", (msg) => {\n  utils.react(msg.id, "🔥");\n});' },
+    { label: "onMsg", code: 'utils.onMessage("aura", "contains", async (msg) => {\n  await utils.sleep(500);\n  utils.react(msg.id, "🔥");\n});' },
     { label: "after", code: 'utils.runAfter(id => {\n  \n});' },
     { label: "if", code: 'if (content.includes("")) {\n  \n}' }
 ];
@@ -543,7 +544,9 @@ function getUtils(channelId: string, afterCallbacks?: any[]) {
         edit: (messageId: string, msg: string) => MessageActions.editMessage?.(channelId, messageId, { content: msg }),
         react: (msgId: string, emoji: string) => {
             const reactionEmoji = emoji.includes(":") ? { name: emoji.split(":")[0], id: emoji.split(":")[1] } : { name: emoji };
-            ReactionActions?.addReaction?.(channelId, msgId, reactionEmoji);
+            setTimeout(() => {
+                ReactionActions?.addReaction?.(channelId, msgId, reactionEmoji);
+            }, 500);
         },
         read: (count: number) => {
             const messages = MessageStore?.getMessages?.(channelId);
@@ -620,21 +623,22 @@ patches.push(instead("sendMessage", MessageActions, (args, orig) => {
     });
 }));
 
-patches.push(before("receiveMessage", MessageActions, (args) => {
-    const channelId = args[0];
-    const message = args[1];
-    if (typeof message?.content !== "string") return;
+const onMessageCreate = ({ message }: { message: any }) => {
+    if (!message || !message.channel_id || !message.content || message.__autoNoteProcessed) return;
 
+    const channelId = message.channel_id;
     const utils = getUtils(channelId);
     const notesSnapshot = Array.isArray(storage.notes) ? JSON.parse(JSON.stringify(storage.notes)) : [];
     
-    // We run addAutoNote but don't care about the return value (as we can't modify the message easily here)
-    // and we want to avoid double processing if we ever sent a message that triggered a fallback.
     addAutoNote(message.content, notesSnapshot, utils, channelId, message);
-}));
+};
 
+FluxDispatcher.subscribe("MESSAGE_CREATE", onMessageCreate);
 
-export const onUnload = () => patches.forEach(p => p());
+export const onUnload = () => {
+    patches.forEach(p => p());
+    FluxDispatcher.unsubscribe("MESSAGE_CREATE", onMessageCreate);
+};
 
 export const settings = () => {
   const [notes, setNotes] = React.useState<AutoNote[]>(() => {
