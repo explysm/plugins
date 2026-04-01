@@ -1,4 +1,4 @@
-import { findByProps } from "@vendetta/metro";
+import { findByProps, findByName, findByStoreName, findByPropsAll } from "@vendetta/metro";
 import { React, ReactNative } from "@vendetta/metro/common";
 import { after, before, instead } from "@vendetta/patcher";
 import { storage } from "@vendetta/plugin";
@@ -82,9 +82,9 @@ return content;`,
   "Chaos Mode": `// Randomly swaps letters
 return content.split("").map(c => Math.random() > 0.8 ? c.toUpperCase() : c.toLowerCase()).join("");`,
   "API Example": `// Fetch data from an API
-return utils.fetch("https://api.quotable.io/random")
-    .then(r => r.json())
-    .then(data => content + "\\n\\n> " + data.content + " — " + data.author);`,
+const res = await utils.fetch("https://api.quotable.io/random");
+const data = await res.json();
+return content + "\n\n> " + data.content + " — " + data.author;`,
   "Webhook: Logger": `// Logs every message you send to a webhook
 utils.webhook("WEBHOOK_URL", {
     name: utils.user.username + " Logger",
@@ -114,23 +114,24 @@ if (storage.total % 5 === 0) {
 }
 return content;`,
   "Profanity Counter": `// Checks for profanity and keeps a total count
-return utils.fetch("https://vector.profanity.dev", {
+const res = await utils.fetch("https://vector.profanity.dev", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message: content })
-}).then(r => r.json()).then(res => {
-    if (res.isProfane) {
-        utils.storage.badWords = (utils.storage.badWords || 0) + 1;
-        utils.toast("Profanity detected! Total: " + utils.storage.badWords);
-        return content + "\\n-# ⚠️ Swear count: " + utils.storage.badWords;
-    }
-    return content;
-});`
+});
+const data = await res.json();
+
+if (data.isProfane) {
+    utils.storage.badWords = (utils.storage.badWords || 0) + 1;
+    utils.toast("Profanity detected! Total: " + utils.storage.badWords);
+    return content + "\n-# ⚠️ Swear count: " + utils.storage.badWords;
+}
+return content;`
 };
 
 const SNIPPETS = [
     { label: "send", code: 'utils.send("");' },
-    { label: "fetch", code: 'utils.fetch("").then(r => r.json())' },
+    { label: "fetch", code: 'const res = await utils.fetch("");\nconst data = await res.json();' },
     { label: "del", code: 'utils.delete(id);' },
     { label: "copy", code: 'utils.copy(content);' },
     { label: "wait", code: 'await utils.sleep(1000);' },
@@ -140,8 +141,27 @@ const SNIPPETS = [
     { label: "read", code: 'const msgs = utils.read(5);' },
     { label: "onMsg", code: 'utils.onMessage("aura", "contains", async (msg) => {\n  await utils.sleep(500);\n  utils.react(msg.id, "🔥");\n});' },
     { label: "after", code: 'utils.runAfter(id => {\n  \n});' },
-    { label: "if", code: 'if (content.includes("")) {\n  \n}' }
+    { label: "if", code: 'if (content.includes("")) {\n  \n}' },
+    { label: "import", code: 'import { findByProps } from "@vendetta/metro";' }
 ];
+
+const transpileScript = (script: string) => {
+    if (!script) return "";
+    return script
+        .replace(/import\s+{([^}]+)}\s+from\s+["']([^"']+)["'];?/g, (m, imports, mod) => {
+            const transformedImports = imports.replace(/\s+as\s+/g, ": ");
+            return `const { ${transformedImports} } = await utils.import("${mod}");`;
+        })
+        .replace(/import\s+\*\s+as\s+(\w+)\s+from\s+["']([^"']+)["'];?/g, (m, name, mod) => {
+            return `const ${name} = await utils.import("${mod}");`;
+        })
+        .replace(/import\s+(\w+)\s+from\s+["']([^"']+)["'];?/g, (m, name, mod) => {
+            return `const { default: ${name} } = await utils.import("${mod}");`;
+        })
+        .replace(/import\s+["']([^"']+)["'];?/g, (m, mod) => {
+            return `await utils.import("${mod}");`;
+        });
+};
 
 const COMMON_EMOJIS = ["📝", "🥷", "🤖", "📢", "💬", "✨", "🔥", "🌈", "🛡️", "🚀", "⚠️", "✅", "❌", "📦", "🔗", "💰", "🎮", "🎵", "📷", "💡"];
 
@@ -397,10 +417,23 @@ function addAutoNote(content: string, notes: AutoNote[], baseUtils: any, channel
               else if (m === "regex") { try { matched = new RegExp(pattern, "i").test(currentContent); } catch(e) {} }
               
               if (matched) cb({ content: currentContent, id: message?.id, author: message?.author, channelId });
+          },
+          import: (pkg: string) => {
+              const modules: Record<string, any> = {
+                  "@vendetta/metro": { findByProps, findByName, findByStoreName, findByPropsAll },
+                  "@vendetta/metro/common": { React, ReactNative, ...findByProps("common")?.common },
+                  "@vendetta/patcher": { after, before, instead },
+                  "@vendetta/plugin": { storage },
+                  "react": React,
+                  "react-native": ReactNative,
+              };
+              return Promise.resolve(modules[pkg] || null);
           }
       };
 
-      const scriptFn = new Function("content", "note", "utils", "storage", note.script);
+      const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+      const scriptBody = transpileScript(note.script);
+      const scriptFn = new AsyncFunction("content", "note", "utils", "storage", scriptBody);
       const scriptReturn = scriptFn(currentContent, note, utils, data);
 
       return Promise.resolve(scriptReturn).then(result => {
@@ -780,8 +813,10 @@ export const settings = () => {
           )
       ),
       React.createElement(TableRowGroup, { title: "Documentation" },
+          React.createElement(TableRow, { label: "Scripting", subLabel: "Scripts now support 'async/await' and 'import' syntax." }),
+          React.createElement(TableRow, { label: "Import Syntax", subLabel: "e.g. import { findByProps } from '@vendetta/metro';" }),
           React.createElement(TableRow, { label: "Placeholders", subLabel: "{trigger}, {time}, {date}, {wordCount}, {clipboard}, {random:A,B}, {api:url}, {channel}, {channelID}, {server}, {serverID}, {user}, {mention:ID}" }),
-          React.createElement(TableRow, { label: "Script Context", subLabel: "content, note, storage, utils (send, delete, edit, react, read, onMessage, copy, runAfter, fetch, log, webhook, sleep, stop, content, channelType, toast, storage)" }),
+          React.createElement(TableRow, { label: "Script Context", subLabel: "content, note, storage, utils (send, delete, edit, react, read, onMessage, copy, runAfter, fetch, log, webhook, sleep, stop, content, channelType, toast, storage, import)" }),
           React.createElement(TableRow, { label: "utils.react(id, emoji)", subLabel: "Reacts to a message. Emoji can be '🔥' or 'name:id'." }),
           React.createElement(TableRow, { label: "utils.read(count)", subLabel: "Returns an array of the last 'count' messages in the channel." }),
           React.createElement(TableRow, { label: "utils.onMessage(query, mode, cb)", subLabel: "Runs callback if message matches. Modes: contains, startswith, matches, regex." }),
@@ -816,7 +851,11 @@ export const settings = () => {
             React.createElement(View, { style: { flexDirection: "row", gap: 12, marginTop: 16 } },
                 React.createElement(TouchableOpacity, { style: [styles.addButton, { flex: 1, marginBottom: 0, backgroundColor: "#23a55a" }], onPress: () => { 
                     try {
-                        if (modalScript.code.trim()) new Function("content", "note", "utils", "storage", modalScript.code);
+                        if (modalScript.code.trim()) {
+                            const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+                            const body = transpileScript(modalScript.code);
+                            new AsyncFunction("content", "note", "utils", "storage", body);
+                        }
                         updateNote(modalScript.id, { script: modalScript.code }); 
                         setModalScript(null); 
                     } catch(e) {
