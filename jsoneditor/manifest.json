@@ -1,1 +1,1 @@
-{"name":"JSON Editor","description":"Allows manual client-side JSON body overrides via /edit.","main":"index.js","authors":[{"name":"explysm","id":"752899252866515025"}],"vendetta":{"icon":"ic_edit_24px"},"hash":"3d1b876503f9be7e1f91e17a0bbb22ec3c95aaebb1f9497c4e8384217eb5e508"}
+{"name":"JSON Editor","description":"Allows manual client-side JSON body overrides via /edit.","main":"index.js","authors":[{"name":"explysm","id":"752899252866515025"}],"vendetta":{"icon":"ic_edit_24px"},"hash":"366fe58db0dfb44ef5253a55e41e1504356fd4782fa71af55dd6c6366c14bd3c"}
