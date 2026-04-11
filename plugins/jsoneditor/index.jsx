@@ -9,6 +9,7 @@ export const manualOverrides = new Map();
 
 const SelectedChannelStore = findByProps("getChannelId");
 const UserStore = findByProps("getUser", "getUsers");
+const MessageStore = findByProps("getMessage", "getMessages");
 
 export const setDeepValue = (obj, path, value) => {
     if (!obj || typeof obj !== 'object') return;
@@ -19,6 +20,8 @@ export const setDeepValue = (obj, path, value) => {
         const key = keys[i];
         if (!current[key] || typeof current[key] !== 'object') {
             current[key] = {};
+        } else {
+            current[key] = Array.isArray(current[key]) ? [...current[key]] : { ...current[key] };
         }
         current = current[key];
     }
@@ -26,13 +29,22 @@ export const setDeepValue = (obj, path, value) => {
     const lastKey = keys[keys.length - 1];
     let finalValue = value;
     
-    if (value === "true") {
-        finalValue = true;
-    } else if (value === "false") {
-        finalValue = false;
-    } else if (typeof value === "string" && !isNaN(value) && value.trim() !== "") {
-        if (value.length < 16) {
-            finalValue = Number(value);
+    if (typeof value === "string") {
+        const trimmed = value.trim();
+        if (trimmed === "true") {
+            finalValue = true;
+        } else if (trimmed === "false") {
+            finalValue = false;
+        } else if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+            try {
+                finalValue = JSON.parse(trimmed);
+            } catch (e) {
+                // Fallback to string if JSON is invalid
+            }
+        } else if (!isNaN(trimmed) && trimmed !== "") {
+            if (trimmed.length < 16) {
+                finalValue = Number(trimmed);
+            }
         }
     }
     
@@ -47,11 +59,15 @@ const addOverride = (id, path, value) => {
 };
 
 const refreshMessage = (id) => {
+    const channelId = SelectedChannelStore?.getChannelId?.();
+    const existing = MessageStore?.getMessage?.(channelId, id);
+    
     FluxDispatcher.dispatch({
         type: "MESSAGE_UPDATE",
         message: { 
+            ...(existing || {}),
             id: id,
-            channel_id: SelectedChannelStore?.getChannelId?.()
+            channel_id: channelId
         },
         otherPluginBypass: false
     });
@@ -61,23 +77,9 @@ let unpatches = [];
 
 export default {
     onLoad: () => {
-        // Cleanup existing commands with our names if any (prevents duplicates on reload)
-        const commandNames = ["edit", "editname", "editcontent", "editavatar", "editclear"];
-        try {
-            // Vendetta usually exposes commands in an object or array we can filter
-            const existing = commands.getCommands?.() || [];
-            existing.forEach(cmd => {
-                if (commandNames.includes(cmd.name)) {
-                    // This is a bit hacky as Vendetta doesn't always provide a delete by name
-                    // but usually unregistering the old one is best.
-                }
-            });
-        } catch (e) {}
-
         unpatches.push(fluxDispatchPatch());
         isEnabled = true;
 
-        // /edit <id> <path> <value>
         unpatches.push(commands.registerCommand({
             name: "edit",
             description: "Manually edit message JSON path",
@@ -96,7 +98,6 @@ export default {
             }
         }));
 
-        // /editname <id> <name>
         unpatches.push(commands.registerCommand({
             name: "editname",
             description: "Preset: Change message author name",
@@ -116,7 +117,6 @@ export default {
             }
         }));
 
-        // /editcontent <id> <content>
         unpatches.push(commands.registerCommand({
             name: "editcontent",
             description: "Preset: Change message content",
@@ -134,7 +134,6 @@ export default {
             }
         }));
 
-        // /editavatar <id> <url/id>
         unpatches.push(commands.registerCommand({
             name: "editavatar",
             description: "Preset: Change message author avatar",
@@ -158,7 +157,6 @@ export default {
             }
         }));
 
-        // /editclear [id]
         unpatches.push(commands.registerCommand({
             name: "editclear",
             description: "Clear overrides for a message or all messages",

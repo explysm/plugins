@@ -11,8 +11,8 @@ const applyOverrides = (message) => {
     const overrides = manualOverrides.get(message.id);
     if (!overrides) return message;
 
-    // Clone to avoid modifying store objects directly
-    const updated = JSON.parse(JSON.stringify(message));
+    // Use a shallow clone for the top level. setDeepValue handles cloning deeper levels.
+    const updated = { ...message };
     for (const [path, value] of overrides.entries()) {
         try {
             setDeepValue(updated, path, value);
@@ -35,7 +35,7 @@ export default () => before("dispatch", FluxDispatcher, (args) => {
             const channelId = ev.message?.channel_id || ev.channelId;
             const existingMsg = MessageStore.getMessage(channelId, id);
             
-            // Merge update with existing message to avoid losing data
+            // Merge carefully to avoid losing fields or circular ref issues
             const baseMessage = { ...existingMsg, ...(ev.message || {}) };
             const updatedMessage = applyOverrides(baseMessage);
             
