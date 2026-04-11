@@ -1,10 +1,13 @@
 import { commands } from "@vendetta";
 import { FluxDispatcher } from "@vendetta/metro/common";
+import { findByProps } from "@vendetta/metro";
 import fluxDispatchPatch from "./patches/flux_dispatch";
 import SettingPage from "./Settings";
 
 export let isEnabled = false;
 export const manualOverrides = new Map();
+
+const SelectedChannelStore = findByProps("getChannelId");
 
 export const setDeepValue = (obj, path, value) => {
     if (!obj) return;
@@ -19,9 +22,19 @@ export const setDeepValue = (obj, path, value) => {
     }
     const lastKey = keys[keys.length - 1];
     let finalValue = value;
-    if (value === "true") finalValue = true;
-    else if (value === "false") finalValue = false;
-    else if (!isNaN(value) && value.trim() !== "") finalValue = Number(value);
+    
+    if (value === "true") {
+        finalValue = true;
+    } else if (value === "false") {
+        finalValue = false;
+    } else if (!isNaN(value) && value.trim() !== "") {
+        // Only convert to number if it's safe (JS precision limit is ~16 digits)
+        // Discord IDs are usually 18-19 digits and MUST remain strings.
+        if (value.length < 16) {
+            finalValue = Number(value);
+        }
+    }
+    
     current[lastKey] = finalValue;
 };
 
@@ -44,11 +57,16 @@ export default {
                 const path = getArg("path");
                 const value = getArg("value");
                 if (!id || !path) return;
+
                 manualOverrides.set(id, { path, value });
                 
+                // Dispatch a MESSAGE_UPDATE to trigger the patch and refresh the UI
                 FluxDispatcher.dispatch({
                     type: "MESSAGE_UPDATE",
-                    message: { id: id },
+                    message: { 
+                        id: id,
+                        channel_id: SelectedChannelStore?.getChannelId?.()
+                    },
                     otherPluginBypass: false
                 });
             }
