@@ -1,0 +1,14 @@
+{
+    "name": "JSON Editor",
+    "description": "Allows manual client-side JSON body overrides via /edit.",
+    "main": "index.jsx",
+    "authors": [
+        {
+            "name": "explysm",
+            "id": "752899252866515025"
+        }
+    ],
+    "vendetta": {
+        "icon": "ic_edit_24px"
+    }
+}
