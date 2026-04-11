@@ -1,8 +1,27 @@
 import { before } from "@vendetta/patcher";
 import { FluxDispatcher } from "@vendetta/metro/common";
+import { findByProps } from "@vendetta/metro";
 import { isEnabled, manualOverrides, setDeepValue } from "..";
 
 const messageEvents = ["MESSAGE_CREATE", "MESSAGE_UPDATE"];
+const MessageStore = findByProps("getMessage", "getMessages");
+
+const applyOverrides = (message) => {
+    if (!message || !message.id) return message;
+    const overrides = manualOverrides.get(message.id);
+    if (!overrides) return message;
+
+    // Clone to avoid modifying store objects directly
+    const updated = JSON.parse(JSON.stringify(message));
+    for (const [path, value] of overrides.entries()) {
+        try {
+            setDeepValue(updated, path, value);
+        } catch (e) {
+            console.error(`[JSON Editor] Failed to set ${path}`, e);
+        }
+    }
+    return updated;
+};
 
 export default () => before("dispatch", FluxDispatcher, (args) => {
     if (!isEnabled) return;
@@ -13,21 +32,15 @@ export default () => before("dispatch", FluxDispatcher, (args) => {
     if (messageEvents.includes(ev.type)) {
         const id = ev.message?.id || ev.id;
         if (id && manualOverrides.has(id)) {
-            const { path, value } = manualOverrides.get(id);
-            const newEv = { ...ev };
+            const channelId = ev.message?.channel_id || ev.channelId;
+            const existingMsg = MessageStore.getMessage(channelId, id);
             
-            // Deep clone message to avoid modifying the original frozen object directly
-            const baseMessage = ev.message || { id: id };
-            const updatedMessage = JSON.parse(JSON.stringify(baseMessage));
+            // Merge update with existing message to avoid losing data
+            const baseMessage = { ...existingMsg, ...(ev.message || {}) };
+            const updatedMessage = applyOverrides(baseMessage);
             
-            try {
-                setDeepValue(updatedMessage, path, value);
-                newEv.message = updatedMessage;
-                // If the event itself has an id property (like some MESSAGE_UPDATE variants)
-                if (newEv.id) newEv.id = id; 
-            } catch (e) {
-                console.error("[JSON Editor] Path set failed", e);
-            }
+            const newEv = { ...ev, message: updatedMessage };
+            if (newEv.id) newEv.id = id;
             
             return [newEv];
         }
@@ -36,14 +49,7 @@ export default () => before("dispatch", FluxDispatcher, (args) => {
         const newMessages = ev.messages.map(m => {
             if (manualOverrides.has(m.id)) {
                 changed = true;
-                const { path, value } = manualOverrides.get(m.id);
-                const updated = JSON.parse(JSON.stringify(m));
-                try {
-                    setDeepValue(updated, path, value);
-                } catch (e) {
-                    console.error("[JSON Editor] Path set failed", e);
-                }
-                return updated;
+                return applyOverrides(m);
             }
             return m;
         });
