@@ -22,7 +22,7 @@ export default function SettingPage() {
         <ScrollView style={{ flex: 1, padding: 10 }}>
             <FormSection title="Active Overrides">
                 {overrideEntries.length === 0 ? (
-                    <FormRow label="No active edits" subLabel="Use /edit <subcommand> ..." />
+                    <FormRow label="No active edits" subLabel="Use /edit, /editname, etc." />
                 ) : (
                     overrideEntries.map(([id, paths]) => (
                         <View key={id} style={{ marginBottom: 10 }}>
@@ -31,7 +31,6 @@ export default function SettingPage() {
                                 subLabel={`${paths.size} override(s)`}
                                 onPress={() => {
                                     manualOverrides.delete(id);
-                                    // React won't auto-refresh Map changes, but Vendetta settings usually do on re-render
                                 }}
                             />
                             {Array.from(paths.entries()).map(([path, value]) => (
@@ -55,11 +54,11 @@ export default function SettingPage() {
             <FormDivider />
 
             <FormSection title="Command Help">
-                <FormRow label="/edit manual <id> <path> <value>" subLabel="Direct JSON path edit" />
-                <FormRow label="/edit name <id> <value>" subLabel="Changes username & global name" />
-                <FormRow label="/edit content <id> <value>" subLabel="Changes message text" />
-                <FormRow label="/edit avatar <id> <id/url>" subLabel="Changes pfp (supports user IDs)" />
-                <FormRow label="/edit clear [id]" subLabel="Remove overrides" />
+                <FormRow label="/edit <id> <path> <value>" subLabel="Direct JSON path edit" />
+                <FormRow label="/editname <id> <value>" subLabel="Changes username & global name" />
+                <FormRow label="/editcontent <id> <value>" subLabel="Changes message text" />
+                <FormRow label="/editavatar <id> <id/url>" subLabel="Changes pfp (supports user IDs)" />
+                <FormRow label="/editclear [id]" subLabel="Remove overrides" />
             </FormSection>
 
             <FormDivider />

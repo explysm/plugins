@@ -5,7 +5,6 @@ import fluxDispatchPatch from "./patches/flux_dispatch";
 import SettingPage from "./Settings";
 
 export let isEnabled = false;
-// Structure: Map<messageId, Map<path, value>>
 export const manualOverrides = new Map();
 
 const SelectedChannelStore = findByProps("getChannelId");
@@ -47,103 +46,142 @@ const addOverride = (id, path, value) => {
     manualOverrides.get(id).set(path, value);
 };
 
-let unpatch;
+const refreshMessage = (id) => {
+    FluxDispatcher.dispatch({
+        type: "MESSAGE_UPDATE",
+        message: { 
+            id: id,
+            channel_id: SelectedChannelStore?.getChannelId?.()
+        },
+        otherPluginBypass: false
+    });
+};
+
+let unpatches = [];
+
 export default {
     onLoad: () => {
-        unpatch = fluxDispatchPatch();
-        isEnabled = true;
-        commands.registerCommand({
-            name: "edit",
-            description: "Manually edit message JSON",
-            options: [
-                {
-                    name: "manual",
-                    description: "Edit any JSON path",
-                    type: 1,
-                    options: [
-                        { name: "id", description: "Message ID", type: 3, required: true },
-                        { name: "path", description: "Path (e.g. author/username)", type: 3, required: true },
-                        { name: "value", description: "New value", type: 3, required: true }
-                    ]
-                },
-                {
-                    name: "name",
-                    description: "Preset: Change author name",
-                    type: 1,
-                    options: [
-                        { name: "id", description: "Message ID", type: 3, required: true },
-                        { name: "value", description: "New name", type: 3, required: true }
-                    ]
-                },
-                {
-                    name: "content",
-                    description: "Preset: Change message content",
-                    type: 1,
-                    options: [
-                        { name: "id", description: "Message ID", type: 3, required: true },
-                        { name: "value", description: "New content", type: 3, required: true }
-                    ]
-                },
-                {
-                    name: "avatar",
-                    description: "Preset: Change author avatar",
-                    type: 1,
-                    options: [
-                        { name: "id", description: "Message ID", type: 3, required: true },
-                        { name: "value", description: "Avatar URL or User ID", type: 3, required: true }
-                    ]
-                },
-                {
-                    name: "clear",
-                    description: "Clear overrides for a message",
-                    type: 1,
-                    options: [
-                        { name: "id", description: "Message ID (omit to clear all)", type: 3, required: false }
-                    ]
+        // Cleanup existing commands with our names if any (prevents duplicates on reload)
+        const commandNames = ["edit", "editname", "editcontent", "editavatar", "editclear"];
+        try {
+            // Vendetta usually exposes commands in an object or array we can filter
+            const existing = commands.getCommands?.() || [];
+            existing.forEach(cmd => {
+                if (commandNames.includes(cmd.name)) {
+                    // This is a bit hacky as Vendetta doesn't always provide a delete by name
+                    // but usually unregistering the old one is best.
                 }
+            });
+        } catch (e) {}
+
+        unpatches.push(fluxDispatchPatch());
+        isEnabled = true;
+
+        // /edit <id> <path> <value>
+        unpatches.push(commands.registerCommand({
+            name: "edit",
+            description: "Manually edit message JSON path",
+            options: [
+                { name: "id", description: "Message ID", type: 3, required: true },
+                { name: "path", description: "Path (e.g. author/username)", type: 3, required: true },
+                { name: "value", description: "New value", type: 3, required: true }
             ],
             execute: (args) => {
-                const subcommand = args[0];
-                const getArg = (name) => subcommand.options.find(a => a.name === name)?.value;
-                const id = getArg("id");
-                const value = getArg("value");
-
-                if (subcommand.name === "clear") {
-                    if (id) manualOverrides.delete(id);
-                    else manualOverrides.clear();
-                } else if (id) {
-                    if (subcommand.name === "manual") {
-                        addOverride(id, getArg("path"), value);
-                    } else if (subcommand.name === "name") {
-                        addOverride(id, "author/username", value);
-                        addOverride(id, "author/globalName", value);
-                    } else if (subcommand.name === "content") {
-                        addOverride(id, "content", value);
-                    } else if (subcommand.name === "avatar") {
-                        let avatarUrl = value;
-                        if (!value.startsWith("http")) {
-                            const user = UserStore.getUser(value);
-                            if (user) avatarUrl = user.getAvatarURL?.();
-                        }
-                        addOverride(id, "author/avatar", avatarUrl);
-                    }
-
-                    // Trigger refresh
-                    FluxDispatcher.dispatch({
-                        type: "MESSAGE_UPDATE",
-                        message: { 
-                            id: id,
-                            channel_id: SelectedChannelStore?.getChannelId?.()
-                        },
-                        otherPluginBypass: false
-                    });
+                const get = (n) => args.find(a => a.name === n)?.value;
+                const id = get("id");
+                if (id) {
+                    addOverride(id, get("path"), get("value"));
+                    refreshMessage(id);
                 }
             }
-        });
+        }));
+
+        // /editname <id> <name>
+        unpatches.push(commands.registerCommand({
+            name: "editname",
+            description: "Preset: Change message author name",
+            options: [
+                { name: "id", description: "Message ID", type: 3, required: true },
+                { name: "value", description: "New name", type: 3, required: true }
+            ],
+            execute: (args) => {
+                const get = (n) => args.find(a => a.name === n)?.value;
+                const id = get("id");
+                const val = get("value");
+                if (id) {
+                    addOverride(id, "author/username", val);
+                    addOverride(id, "author/globalName", val);
+                    refreshMessage(id);
+                }
+            }
+        }));
+
+        // /editcontent <id> <content>
+        unpatches.push(commands.registerCommand({
+            name: "editcontent",
+            description: "Preset: Change message content",
+            options: [
+                { name: "id", description: "Message ID", type: 3, required: true },
+                { name: "value", description: "New content", type: 3, required: true }
+            ],
+            execute: (args) => {
+                const get = (n) => args.find(a => a.name === n)?.value;
+                const id = get("id");
+                if (id) {
+                    addOverride(id, "content", get("value"));
+                    refreshMessage(id);
+                }
+            }
+        }));
+
+        // /editavatar <id> <url/id>
+        unpatches.push(commands.registerCommand({
+            name: "editavatar",
+            description: "Preset: Change message author avatar",
+            options: [
+                { name: "id", description: "Message ID", type: 3, required: true },
+                { name: "value", description: "Avatar URL or User ID", type: 3, required: true }
+            ],
+            execute: (args) => {
+                const get = (n) => args.find(a => a.name === n)?.value;
+                const id = get("id");
+                const val = get("value");
+                if (id) {
+                    let avatarUrl = val;
+                    if (!val.startsWith("http")) {
+                        const user = UserStore.getUser(val);
+                        if (user) avatarUrl = user.getAvatarURL?.();
+                    }
+                    addOverride(id, "author/avatar", avatarUrl);
+                    refreshMessage(id);
+                }
+            }
+        }));
+
+        // /editclear [id]
+        unpatches.push(commands.registerCommand({
+            name: "editclear",
+            description: "Clear overrides for a message or all messages",
+            options: [
+                { name: "id", description: "Message ID (omit to clear all)", type: 3, required: false }
+            ],
+            execute: (args) => {
+                const id = args.find(a => a.name === "id")?.value;
+                if (id) {
+                    manualOverrides.delete(id);
+                    refreshMessage(id);
+                } else {
+                    const ids = Array.from(manualOverrides.keys());
+                    manualOverrides.clear();
+                    ids.forEach(refreshMessage);
+                }
+            }
+        }));
     },
     onUnload: () => {
         isEnabled = false;
-        unpatch?.();
+        unpatches.forEach(u => u?.());
+        unpatches = [];
     },
     settings: SettingPage
 }
